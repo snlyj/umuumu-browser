@@ -17,7 +17,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
-/** v1.4 防指纹界面截图（只在 -Proborazzi.test.record=true 时写文件，写到 app/build/fp-screens） */
+/** v1.4 防指纹界面截图（只在 -Proborazzi.test.record=true 时写文件，写到 cute-browser-release/screens） */
 @OptIn(ExperimentalRoborazziApi::class)
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -48,9 +48,9 @@ class FpScreenshotTest {
         rule.onNodeWithText("网页自动填充").performScrollTo()
         rule.waitForIdle(); rule.mainClock.autoAdvance = false
         settle()
-        captureScreenRoboImage("build/fp-screens/fp_settings_standard.png")
+        captureScreenRoboImage("../../cute-browser-release/screens/24_fp_settings_standard.png")
         rule.onNodeWithText("严格").performClick(); settle()
-        captureScreenRoboImage("build/fp-screens/fp_settings_strict.png")
+        captureScreenRoboImage("../../cute-browser-release/screens/25_fp_settings_strict.png")
         rule.onNodeWithText("标准").performClick(); settle()
 
         val act = rule.activity
@@ -60,6 +60,6 @@ class FpScreenshotTest {
         val tab = controller.current.apply { isHome = false; url = "https://www.example.com/" }
         act.setContent { CuteTheme(CuteThemeId.STRAWBERRY) { com.yuka.cutebrowser.ui.ShieldDialog(tab, controller) {} } }
         settle()
-        captureScreenRoboImage("build/fp-screens/fp_shield_dialog.png")
+        captureScreenRoboImage("../../cute-browser-release/screens/26_fp_shield_dialog.png")
     }
 }

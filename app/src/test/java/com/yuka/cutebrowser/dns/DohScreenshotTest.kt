@@ -38,7 +38,7 @@ class DohScreenshotTest {
             }
         }
         rule.waitForIdle()
-        rule.onRoot().captureRoboImage("/workspace/cute-browser-doh-screens/$file")
+        rule.onRoot().captureRoboImage("../../cute-browser-release/screens/$file")
     }
 
     @Test fun supported() = shot(true, CuteThemeId.STRAWBERRY, "21_doh_settings.png")

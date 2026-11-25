@@ -415,7 +415,7 @@ private fun SettingsSheet(controller: BrowserController, repo: CuteRepository, o
 
         Spacer(Modifier.height(20.dp))
         Text(
-            "唔姆唔姆 v1.3 · 用爱心制作 💕",
+            "唔姆唔姆 v1.4 · 用爱心制作 💕",
             color = p.subText, fontSize = 12.sp,
             modifier = Modifier.align(Alignment.CenterHorizontally),
         )

@@ -367,7 +367,7 @@ fun SecuritySheet(controller: BrowserController, repo: CuteRepository, protectio
         ) {
             Text("🧅 系统私人 DNS：$dns", color = p.text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             Text(
-                "唔姆唔姆用系统的「私人 DNS」（DNS over TLS）来加密域名查询，比在 App 里自己转发更快更稳。" +
+                "也可以不用下面 App 内的 DoH，直接用系统的「私人 DNS」（DNS over TLS）：对手机上所有 App 都生效，不经过唔姆唔姆的本地代理。开着下面的加密 DNS 时，网页的域名查询走 App 内的 DoH。" +
                     "可以在系统设置里填 dns.google、1dot1dot1dot1.cloudflare-dns.com 或 dns.alidns.com。",
                 color = p.subText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp),
             )

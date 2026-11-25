@@ -106,6 +106,8 @@ class ScreenshotTest {
         scrolled { rule.onNodeWithText("安全与隐私（HTTPS、Cookie、权限、应用锁…）").performScrollTo() }
         rule.onNodeWithText("安全与隐私（HTTPS、Cookie、权限、应用锁…）").performClick(); settle()
         captureScreenRoboImage("$OUT/11_security.png")
+        scrolled { rule.onNodeWithText("防指纹").performScrollTo() }; settle()
+        captureScreenRoboImage("$OUT/27_security_antifp_merged.png")
         scrolled { rule.onNodeWithText("退出时清除数据").performScrollTo() }; settle()
         captureScreenRoboImage("$OUT/12_security_more.png")
         androidx.test.espresso.Espresso.pressBack(); settle()

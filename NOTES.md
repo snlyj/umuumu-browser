@@ -130,3 +130,114 @@ New code: `filter/FilterEngine.kt` (ABP/uBO subset engine), `security/SecurityUt
 ### Progress log (v1.3)
 - 2026-11-26 01:19 (UTC+8): all 11 items implemented; release + debug built and copied; source zip refreshed.
 - 2026-11-26 01:35 (UTC+8): fixed test isolation (AdBlocker.resetForTest); all 15 tests pass in one run; final release/debug rebuilt; zip refreshed (48 files, no keystore); emulator attempt done (see verification). v1.3 complete.
+
+### Progress log (v1.4)
+- 2026-11-26 02:15 (UTC+8): main was clean vs v1.3-baseline (9afbb38). Merged feature/doh then feature/antifp — git auto-merged with **no textual conflicts**; semantic check done by reading the merged diff. Bumped to 1.4 / code 5, added okhttp dontwarn rules, fixed stale DNS card wording. Next: tests, builds, screenshots, notes fold-in, smoke test, tag.
+
+
+## v1.4 — built-in DoH + anti-fingerprinting (merged from feature/doh and feature/antifp)
+Merge: feature/doh and feature/antifp were merged into main from baseline 9afbb38 (tag v1.3-baseline) with no textual conflicts. They touch the same files in disjoint places (MainActivity: DoH start/awaitInitial + fpOff collector; BrowserController: prewarm via DohManager + FingerprintShield hooks; SecurityPrefs: `fp`/`fps` keys; SecurityUi: shield dialog toggle + DoH section + level picker; build.gradle: okhttp). The v1.3 "Private DNS" card text was updated since it claimed App-level forwarding was a bad idea (DoH is now an option, default off). R8: okhttp 4.12 ships consumer rules; extra `-dontwarn` for bouncycastle/conscrypt/openjsse/okhttp platform added. Anti-fp needs no keep rules (asset script, no reflection). Screenshot tests now write to cute-browser-release/screens (21–27).
+
+## 内置加密 DNS（DoH）— feature/doh
+
+Branch `feature/doh` off `v1.3-baseline`. Everything lives in `app/src/main/java/com/yuka/cutebrowser/dns/` + `ui/DohSettings.kt`; touch points elsewhere are 1–3 lines each (see "Touch points").
+
+### Design
+- **LocalProxy** (`dns/LocalProxy.kt`): HTTP proxy on `127.0.0.1:<random>` (ServerSocket, backlog 128).
+  - `CONNECT host:port` → resolve via DoH → connect → `200 Connection Established` → raw byte relay (TLS stays end-to-end; WebView still validates certs).
+  - Plain `GET http://host/…` → request line rewritten to origin-form, `Proxy-Connection`/`Connection`/`Keep-Alive`/`Proxy-Authorization` dropped, `Connection: close` added (so a client connection is never reused for another host).
+  - Errors: unresolvable / connect failure → `502` (WebView shows ERR_TUNNEL_CONNECTION_FAILED, not ERR_NAME_NOT_RESOLVED); proxy-to-itself → `403`; garbage → `400`.
+  - Threads: 2 blocking relay threads per tunnel (128 KB stacks, daemon, cached pool), TCP_NODELAY, half-close propagated (shutdownOutput), both sockets closed when both directions finish. Chromium opens ≤32 sockets per proxy, so ≤~64 relay threads.
+  - Happy eyeballs (RFC 8305): addresses IPv6/IPv4 interleaved, non-blocking connects started 250 ms apart (or immediately after a failure) on one Selector, first success wins. If IPv6 loses/fails, IPv4 goes first for 10 minutes.
+- **DohResolver** (`dns/DohResolver.kt`): A + AAAA in parallel; returns once A is in plus ≤50 ms for AAAA (RFC 8305 resolution delay). Coalesces concurrent identical queries. IP literals / localhost skip DNS.
+  - NXDOMAIN / NODATA on both → `UnknownHostException`, **never** falls back to system DNS.
+  - Transport errors/timeouts (5 s) / SERVFAIL: **fail-open (default)** → `InetAddress.getAllByName` + toast (max once/60 s) "加密 DNS 暂时连不上，先用系统 DNS 啦 🐰"; **strict mode** → fail.
+- **Transport** (`OkHttpDohTransport`): RFC 8484 GET `?dns=<base64url>` with `Accept: application/dns-message`, OkHttp 4.12 (HTTP/2 multiplexing, pool of 2 idle conns / 5 min). Connects to hard-coded bootstrap IPs (custom Dns), certificate checked against the provider hostname. Custom URL with a hostname → that one hostname is looked up via system DNS (IP-literal URLs need no lookup).
+- **DnsMessage** (`dns/DnsMessage.kt`): own wire-format encoder/decoder: EDNS0 OPT + RFC 8467 padding to 128-byte blocks, compression pointers with loop guard, TTL high-bit = 0, negative TTL from SOA (RFC 2308), answer-for-wrong-question rejected.
+- **DnsCache** (`dns/DnsCache.kt`): LRU 512 entries, TTL clamped 30 s–6 h, negative 15–300 s, serve-stale up to 5 min while refreshing in background (positive answers only). In-memory only (never on disk).
+- **DohManager** (`dns/DohManager.kt`): own DataStore file `doh_prefs` (enabled=false, provider=cloudflare, customUrl, strict=false). Applies prefs: start proxy (IO) → `ProxyController.setProxyOverride("127.0.0.1:port")` and waits for the listener (≤2 s) → pre-warms the DoH connection. Disable → `clearProxyOverride` → stop accepting (live tunnels finish naturally) → old resolver closed after 10 s. Provider switch swaps the resolver in place (no proxy restart). `PROXY_OVERRIDE` unsupported → settings show 不支持 card.
+- Providers (bootstrap IPs hard-coded): Cloudflare `cloudflare-dns.com` (1.1.1.1, 1.0.0.1, 2606:4700:4700::1111/1001), Google `dns.google` (8.8.8.8, 8.8.4.4, 2001:4860:4860::8888/8844), Quad9 `dns.quad9.net` (9.9.9.9, 149.112.112.112, 2620:fe::fe, 2620:fe::9), 阿里 `dns.alidns.com` (223.5.5.5, 223.6.6.6, 2400:3200::1, 2400:3200:baba::1), 腾讯 DNSPod `doh.pub` (1.12.12.12, 120.53.53.53), 自定义 https URL.
+- **Off by default = zero cost**: when off nothing from OkHttp/dns is class-loaded except reading one tiny DataStore file in parallel with the security prefs; `awaitInitial()` before session restore returns as soon as that read completes.
+
+### Touch points outside dns/
+- `MainActivity.kt`: import; `DohManager.notice = controller::toast`; `lifecycleScope.launch { DohManager.run(applicationContext) }`; `DohManager.awaitInitial()` right before `controller.restore(saved)` (so the first page never bypasses DoH when it's on).
+- `BrowserController.prewarm()`: `InetAddress` warm-up replaced by `DohManager.prewarm(PREWARM_HOSTS)` (DoH when on, system DNS when off); unused `InetAddress` import removed.
+- `ui/SecurityUi.kt`: `Gap(); DohSettingsSection()` after the existing 系统私人 DNS card (card/shortcut unchanged).
+- `app/build.gradle.kts`: `implementation("com.squareup.okhttp3:okhttp:4.12.0")`.
+
+### Settings UI (安全与隐私 → 加密 DNS)
+Toggle「App 内加密 DNS（DoH）」, provider chips (+ custom URL field with https validation), 「测一测 ⏱️」(cold = new TLS connection + query, warm = reused connection) and 「全部测一测」, 严格模式 toggle, status card (运行中/统计: lookups, cache-hit %, avg DoH ms, live tunnels, fallback count) + notes (downloads use system DNS, system proxy ignored). Screens: /workspace/cute-browser-doh-screens/21_doh_settings.png, 22_doh_settings_starry.png, 23_doh_unsupported.png.
+
+### Tests
+`app/src/test/java/com/yuka/cutebrowser/dns/`: DnsMessageTest (10), DnsCacheTest (4), DohResolverTest (7: interleave+cache, literals, NXDOMAIN no fallback, fail-open fallback+notice, strict fail-closed, slow AAAA not blocking, coalescing), LocalProxyTest (5: CONNECT echo 200 KB + half-close, HTTP rewrite, 502/403/400, happy-eyeballs past blackhole+refused, host:port parsing), DohScreenshotTest (3), DohLiveTest (2, skipped unless `UMU_LIVE_DOH=1`).
+Build in the worktree with its own project cache: `./gradlew --project-cache-dir /workspace/cute-browser-doh/.gradle-doh assembleDebug testDebugUnitTest`.
+
+### Measured (box, US network, JVM — NOT a phone)
+Live run (`UMU_LIVE_DOH=1`), OkHttp transport, A query:
+- Cloudflare cold ≈150 ms (incl. TLS; first run also JVM class loading) / warm median ≈12–20 ms; Quad9 ≈90 / ≈9 ms; Google ≈130 / ≈70 ms; 阿里 ≈0.9–1.3 s / ≈220 ms; DNSPod ≈1.1–1.3 s / ≈190 ms (CN providers are far from this US box; in mainland China expect the opposite).
+- Full HTTPS GET with new connection each time (keep-alive off), median of 5: example.com proxy 97 ms vs direct 93 ms; cloudflare.com 107 vs 107; github.com 138 vs 131. Cached resolve: ~0.02 ms. Caveat: the box's system DNS returns fake 198.18.x IPs through a sandbox egress gateway, so "direct" isn't a clean baseline.
+- Unit-test timings: 200 KB echo through a tunnel, happy-eyeballs fallback past a blackhole address < 2 s (one 250 ms step).
+- Not measured: anything on Android (no stable device/emulator), memory, battery, release APK size. Debug APK 12,620,587 (v1.3) → 13,169,058 bytes (+OkHttp/okio + dns code, unminified).
+
+### Limitations
+- DownloadManager downloads don't use the WebView proxy → their hostnames go to system DNS (blob:/data: downloads are in-page, unaffected).
+- Proxy override is app-wide (all WebViews, incl. incognito profiles per docs); the system/Wi-Fi HTTP proxy is ignored while on (VPNs unaffected).
+- With a proxy Chromium doesn't do its own DNS: no HTTPS/SVCB records → no ECH, and no DNS-based HTTP/3 hints; QUIC/HTTP3 is not used through an HTTP proxy at all (TCP+TLS only). That's the main speed cost besides the first DoH lookup.
+- DNS failures show Chromium's tunnel/proxy error page rather than "address not found".
+- Any app on the device can connect to the 127.0.0.1 proxy port while it's on (no auth); it only gives them DNS-over-HTTPS forwarding they could do themselves. Requests to the proxy itself are refused.
+- Existing direct keep-alive connections opened before turning it on may be reused briefly.
+- The DoH cache is shared by normal and incognito tabs (memory only, cleared on process death).
+- ProxyController behaviour, the strict-mode error pages, toast, and real-world speed are compile/unit-tested only — not run on a device.
+
+## v1.4 防指纹 (anti-fingerprinting) — branch feature/antifp
+
+(To be folded into NOTES.md when merging.)
+
+Brave-style "farbling": small per-site deterministic noise + normalising high-entropy values, injected with
+`WebViewCompat.addDocumentStartJavaScript(wv, script, setOf("*"))` (all origins, all frames, before page scripts) — the same
+mechanism as the v1.3 WebRTC/GPC script, but a separate ScriptHandler so it can be swapped without rebuilding WebViews.
+
+### Files
+- `fp-js/fingerprint.js` — readable source. `fp-js/build.sh` → terser → `app/src/main/assets/fingerprint.min.js` (≈9.3 KB, committed). Re-run build.sh after editing the source.
+- `privacy/fingerprint/FpSeed.kt` — eTLD+1 (`site()`, same approximate suffix list as `filter/Domains.SECOND_LEVEL`, now public), FNV-1a + fmix32 seed, `newKey()` (SecureRandom 128-bit hex).
+- `privacy/fingerprint/FingerprintShield.kt` — loads asset (background preload), builds config JSON, attaches per WebView, swaps scripts on setting changes (`update()` → `ScriptHandler.remove()` + re-add on live WebViews only), incognito key, fallback for old WebViews.
+- Touch points: `BrowserController` (field, `attach` in setupWebView, `update` in applySecurity, `setFpExceptions`, `setSiteFingerprint`, fallback in onPageStarted, `endIncognito`), `CuteRepository` (`SecurityPrefs.antiFp/fpStrict` = JSON keys `fp`/`fps`; DataStore key `fp_off` = exempt eTLD+1 set), `MainActivity` (load `fp_off` before first page + collect), `SecurityUi` (toggle + 标准/严格 picker in 安全与隐私; shield dialog line + 「在这个网站防指纹」), `FilterEngine` (`SECOND_LEVEL` made public).
+
+### Seeds
+- Session key: random per process start (= app restart). Incognito: own key, created with the first incognito WebView, dropped when the incognito session ends.
+- Site = approx eTLD+1 of the **top-level** page (iframes: `top.location` if same-origin, else `location.ancestorOrigins` last entry). Seed = fmix32(FNV-1a(key + "|" + site)). Kotlin and JS implementations are cross-checked (`FpSeedTest` vectors == `node fp-js/seed-vectors.mjs --check`).
+- So: same site → same values all session (sites don't break on reload), different sites → different values, restart → new values.
+
+### What is covered (config `l`: 1 standard, 2 strict)
+- Canvas: `toDataURL`/`toBlob` (copy → noise → encode; original canvas untouched), `getImageData` (2D + OffscreenCanvas 2D), `OffscreenCanvas.convertToBlob`. Noise = flip LSB of one colour channel on a sparse, seed+size-determined set of fully opaque pixels (~1 in 24). Skipped above 4 Mpx.
+- `measureText().width` × per-font factor (±1e-5, sub-pixel).
+- WebGL/WebGL2 (patched lazily at the first `getContext('webgl*')` — touching WebGL interfaces early costs ~1 ms): `UNMASKED_VENDOR/RENDERER` → "WebKit"/"WebKit WebGL"; caps clamped down to common values (vertex attribs 16, uniform vectors 256/224, varyings 15, texture units 32/16/16; strict also MAX_TEXTURE/RENDERBUFFER/CUBE_MAP 4096, viewport 4096); `readPixels` RGBA/UNSIGNED_BYTE noise.
+- Audio: `AudioBuffer.getChannelData` (once per channel, buffers ≤ 262k samples) and `copyFromChannel`, `AnalyserNode.getFloat{Frequency,TimeDomain}Data` × (1 − ~1e-5·k) — inaudible.
+- navigator: hardwareConcurrency 8, deviceMemory 4, platform "Linux armv8l", maxTouchPoints 5, language "zh-CN", languages ["zh-CN","zh"]; getGamepads → 4 nulls; usb/bluetooth/hid/serial/keyboard/xr removed; NetworkInformation rtt 100 / downlink 10 / effectiveType 4g (strict: type "unknown"); BatteryManager → charging, level 1; `enumerateDevices` → one device per kind unless labels are present (i.e. camera/mic was granted); strict: `speechSynthesis.getVoices()` → [].
+- plugins/mimeTypes: Android Chrome/WebView already returns empty arrays → left native (spoofing would be more detectable).
+- screen: width/height/avail* snapped to common phone CSS sizes (360…430 × 640…932; tablets to 64-px steps), colorDepth/pixelDepth 24; devicePixelRatio rounded to 0.5 steps. Strict: 360×800 (tablet 800×1280), DPR 2.
+- performance.now(): floored to 0.1 ms (standard; removes the 5 µs precision of cross-origin-isolated pages) / 1 ms (strict).
+- Sensors: `devicemotion`/`deviceorientation(absolute)` listeners on window and the `on…` handlers are swallowed; Generic Sensor constructors removed.
+- Strict only — timezone UTC: getTimezoneOffset 0, local Date getters/setters mapped to UTC ones, toString/toDateString/toTimeString as GMT+0000 (协调世界时), toLocale*String and `Intl.DateTimeFormat` default `timeZone: 'UTC'` (Proxy).
+- Native look: patched functions keep name/length, have no `prototype`, and `Function.prototype.toString` (itself patched) returns the original's "function x() { [native code] }".
+- iframes: `HTMLIFrameElement/HTMLFrameElement.contentWindow/contentDocument` getters patch same-origin child windows (e.g. about:blank) before the page can use them; a per-window marker (Symbol.for(secret)) prevents double patching.
+- Per-site exception (shield chip → 「在这个网站防指纹」) keyed by eTLD+1 → the script returns immediately for that site. Toggle reloads the page.
+
+### Verification (2026-11-26, this box)
+- `fp-js/chrome-test.mjs`: headless desktop Chrome 156 + CDP `Page.addScriptToEvaluateOnNewDocument` (same timing semantics as WebView document-start scripts) against `fp-js/fp-testpage.html` (copy of /workspace/umu-testsite/fp.html) on fake hosts mapped to 127.0.0.1: **all checks pass** — canvas/imageData/WebGL readPixels/audio/measureText change vs unprotected, stable on reload, equal across subdomains of one eTLD+1, differ across sites and across session keys, exception site = unprotected; iframe (incl. dynamically created about:blank) patched; toString native; strict TZ/screen/DPR/timer.
+- Script cost: ≈0.45 ms per frame warm, ≈0.8 ms first run incl. parse (desktop x86; expect 2–4× on a phone).
+- No new JS exceptions on bing.com, baidu.com, bilibili.com, Google Maps, map.baidu.com (standard and strict) in desktop Chrome.
+- Unit tests: `FpSeedTest` (eTLD+1, seed vectors vs JS, per-site/per-key differences, script assembly + incognito key rotation + exceptions, `node --check` of the assembled script), `FpScreenshotTest` (UI shots to app/build/fp-screens with -Proborazzi.test.record=true). Full suite: 21 tests pass. `assembleDebug` OK.
+- **Not run on Android WebView / a device.** Desktop Chrome ≠ Android WebView (e.g. WebView feature set, whether document-start scripts run in about:blank frames).
+
+### Limitations (honest)
+- Chromium engine & version remain visible (UA/Client Hints major version, JS/CSS feature set, Android WebView quirks). We look like "a Chromium on Android with fingerprint protection", not like everyone else.
+- Spoofing is detectable by dedicated tools (CreepJS-style "lie" detection: stack traces through our wrappers, cross-realm/worker comparisons, Proxy behaviour, inconsistencies like screen vs CSS media queries or timezone vs Date constructor). Typical commercial tracker scripts are defeated (their hash changes per site/session); targeted detection isn't.
+- Not covered: Web Workers / SharedWorkers / ServiceWorkers (document-start scripts don't run there → real hardwareConcurrency, OffscreenCanvas in workers un-noised); CSS media queries (`device-width`, `resolution`), `window.outerWidth/outerHeight`; DOM-based font enumeration via element offsetWidth; `document.fonts.check`; `Intl` locale/time-zone outside DateTimeFormat; `new Date(y,m,d…)`/`Date.parse` still local in strict; HTTP headers (Accept-Language is the device locale); WebGL prototype methods captured by a page *before* it ever calls getContext('webgl'); `window[0]`/`frames[0]` access to a fresh about:blank iframe bypasses the contentWindow hook.
+- Old WebViews without DOCUMENT_START_SCRIPT: fallback evaluateJavascript in onPageStarted, main frame only, can run after page scripts.
+- Breakage risks: strict timezone shows wrong local times (by design); blocked device sensors break tilt/360° content and some games; generic WebGL renderer may make a few WebGL apps pick conservative paths; canvas noise could affect pixel-exact canvas apps (CAPTCHA/image hashing) — per-site exception exists; languages forced zh-CN even if device locale differs.
+
+### v1.4 final status
+- Tests (all in one run, `testDebugUnitTest -Proborazzi.test.record=true`): 52 run, 50 pass, 2 skipped (DohLiveTest — needs network). Sizes: release 3,122,982 B (v1.3 2,961,276), debug 12,966,703 B (v1.3 12,620,587); DEX method refs 20,889 (v1.3 19,645).
+- Screenshots: screens/21–23 (DoH), 24–26 (anti-fp), 27 (merged security sheet).
+- Release APK signed CN=UmuUmu, versionCode 5 / 1.4. Release mapping confirms okhttp3, DohManager, LocalProxy, FingerprintShield retained.
