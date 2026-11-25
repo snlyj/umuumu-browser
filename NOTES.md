@@ -321,3 +321,27 @@ DataStore corruption handler + IO-error fallback, tolerant per-entry JSON decode
 ### v1.6 final status
 - `./gradlew testDebugUnitTest -Proborazzi.test.record=true`: 20 suites, 90 tests, 2 skipped (DohLiveTest, network), 0 failures. `fp-js/chrome-test.mjs`: ALL PASS. `fp-js/chrome-locale-test.mjs`: 89 checks passed, 0 failed (desktop Chrome, not WebView).
 - Release APK signed CN=UmuUmu, versionCode 7 / 1.6: 3,158,706 B (v1.5 3,141,610); debug 13,051,889 B (v1.5 13,034,802). Release manifest has the new configChanges + dataExtractionRules; `BlobBridge.postMessage` survives R8.
+
+
+## v1.6.1 — incognito menu is a real toggle (versionCode 8)
+User report: after entering incognito, tapping the same control again opened another incognito tab every time; the only way out was to close tab cards one by one.
+
+### Root cause
+The menu item 「隐身标签」 and the original onIncognito handler always called `controller.newTab(incognito = true)`. There was already an unused `closeAllIncognito()`, but nothing in the UI was a toggle, and the label never changed.
+
+### New behaviour
+- Menu item is a **toggle** (switch semantics): label/icon/checked state follow the current tab. Off: 「隐身模式」; on (accent-filled icon): 「结束隐身」.
+- Turning **on**: if an incognito tab already exists, switch to the most recently used one (no extra tab). If none exists, create one.
+- Turning **off**: same policy as Chrome leaving incognito — **close every incognito tab and wipe that session** (the existing incognito WebView profile, cookies/cache/storage, http exceptions, fingerprint incognito key). Then switch back to the most recently used normal tab, or create a normal tab if there is none. A toast confirms this.
+- Tab switcher: the mask button stays an explicit 「新建隐身标签」 (this is how you open a second incognito tab on purpose). A 「结束隐身」 chip appears whenever any incognito tab exists, with the same close-all-and-wipe behaviour.
+- Closing the last incognito tab card still ends the session, as before.
+
+### Tests / artifacts
+- New `IncognitoToggleTest` (3 cases: toggle enter/reuse/exit without piling up, explicit new incognito tab still allowed, exit returns to last normal tab or creates one).
+- Screenshot tests: label is now 「隐身模式」; new `screens/18_incognito_menu.png` (checked 「结束隐身」); `02_menu.png` and `14_tabs_incognito.png` updated (end-incognito chip in the tab sheet).
+- Also made screenshot `waitForBrowser()` robust (don't freeze the compose clock before session/theme are ready; don't use waitForIdle while the bunny's infinite animation is running) and isolated the DataStore-corruption unit test (the repo DataStore is a process singleton, so a shared file could not be tested once another test had opened it).
+- `./gradlew testDebugUnitTest -Proborazzi.test.record=true`: 21 suites, 93 tests, 2 skipped (DohLiveTest), 0 failures.
+- Release APK signed CN=UmuUmu, versionCode 8 / 1.6.1.
+
+### Not runtime-verified
+The toggle was not re-tested on a phone. Logic is covered by unit tests and Robolectric screenshots of the new labels/chip. Existing v1.6 limitations still apply (no emulator smoke test of incognito profile isolation, etc.).

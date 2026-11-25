@@ -2,6 +2,7 @@ package com.yuka.cutebrowser
 
 import androidx.activity.compose.setContent
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -26,6 +27,23 @@ class TzLangScreenshotTest {
     @get:Rule
     val rule = createAndroidComposeRule<MainActivity>()
 
+    private fun waitForBrowser() {
+        // 主题和会话是异步读的。完整套件更慢，若一上来就把时钟停掉，主线程协程被冻住，界面会一直是空白底色。
+        // 不能用 waitUntil/waitForIdle：主页小兔子的耳朵是无限动画，autoAdvance 开着时永远等不到空闲。
+        rule.mainClock.autoAdvance = true
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline) {
+            Thread.sleep(50)
+            org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            rule.mainClock.advanceTimeBy(200)
+            if (runCatching { rule.onAllNodesWithContentDescription("菜单").fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false)) {
+                rule.mainClock.autoAdvance = false
+                return
+            }
+        }
+        rule.mainClock.autoAdvance = false
+    }
+
     private fun settle() {
         repeat(6) {
             Thread.sleep(150)
@@ -41,6 +59,7 @@ class TzLangScreenshotTest {
 
     @Test
     fun tzLangUi() {
+        waitForBrowser()
         rule.mainClock.autoAdvance = false
         settle()
         rule.onNodeWithContentDescription("菜单").performClick(); settle()

@@ -106,7 +106,8 @@ fun CuteSheets(
                 SheetType.Menu -> MenuSheet(
                     isBookmarked = isBookmarked,
                     onNewTab = { controller.newTab(); close() },
-                    onIncognito = { controller.newTab(incognito = true); close() },
+                    incognito = controller.current.incognito,
+                    onIncognito = { controller.toggleIncognito(); close() },
                     onBookmark = { onToggleBookmark(); close() },
                     onBookmarks = { onChange(SheetType.Bookmarks) },
                     onHistory = { onChange(SheetType.History) },
@@ -166,6 +167,7 @@ internal fun SheetHeader(title: String, emoji: String, trailing: @Composable () 
 private fun MenuSheet(
     isBookmarked: Boolean,
     onNewTab: () -> Unit,
+    incognito: Boolean,
     onIncognito: () -> Unit,
     onBookmark: () -> Unit,
     onBookmarks: () -> Unit,
@@ -177,24 +179,27 @@ private fun MenuSheet(
     val p = LocalCutePalette.current
     SheetHeader("唔姆菜单", "🎀")
     Spacer(Modifier.height(8.dp))
+    data class MenuTile(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector, val action: () -> Unit, val checked: Boolean? = null)
     val tiles = listOf(
-        Triple("新标签页", CuteIcons.Plus, onNewTab),
-        Triple("隐身标签", CuteIcons.Mask, onIncognito),
-        Triple(if (isBookmarked) "取消收藏" else "收藏本页", if (isBookmarked) CuteIcons.HeartFilled else CuteIcons.Heart, onBookmark),
-        Triple("我的收藏", CuteIcons.StarFilled, onBookmarks),
-        Triple("历史记录", CuteIcons.Clock, onHistory),
-        Triple("下载", CuteIcons.Download, onDownloads),
-        Triple("分享", CuteIcons.Share, onShare),
-        Triple("设置", CuteIcons.Flower, onSettings),
+        MenuTile("新标签页", CuteIcons.Plus, onNewTab),
+        MenuTile(if (incognito) "结束隐身" else "隐身模式", CuteIcons.Mask, onIncognito, checked = incognito),
+        MenuTile(if (isBookmarked) "取消收藏" else "收藏本页", if (isBookmarked) CuteIcons.HeartFilled else CuteIcons.Heart, onBookmark),
+        MenuTile("我的收藏", CuteIcons.StarFilled, onBookmarks),
+        MenuTile("历史记录", CuteIcons.Clock, onHistory),
+        MenuTile("下载", CuteIcons.Download, onDownloads),
+        MenuTile("分享", CuteIcons.Share, onShare),
+        MenuTile("设置", CuteIcons.Flower, onSettings),
     )
     val bgs = listOf(p.pink, p.lavender, p.mint)
     tiles.chunked(4).forEachIndexed { r, row ->
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            row.forEachIndexed { c, (label, icon, action) ->
+            row.forEachIndexed { c, tile ->
+                val on = tile.checked == true
+                val clickMod = if (tile.checked != null) Modifier.bouncySwitch(tile.checked, tile.action) else Modifier.bouncyClick(tile.action)
                 Column(
                     Modifier
                         .weight(1f)
-                        .bouncyClick(action)
+                        .then(clickMod)
                         .padding(vertical = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
@@ -202,11 +207,11 @@ private fun MenuSheet(
                         Modifier
                             .size(56.dp)
                             .clip(RoundedCornerShape(22.dp))
-                            .background(bgs[(r * 4 + c) % 3]),
+                            .background(if (on) p.accent else bgs[(r * 4 + c) % 3]),
                         contentAlignment = Alignment.Center,
-                    ) { Icon(icon, null, tint = p.accent, modifier = Modifier.size(26.dp)) }
+                    ) { Icon(tile.icon, null, tint = if (on) p.onAccent else p.accent, modifier = Modifier.size(26.dp)) }
                     Spacer(Modifier.height(6.dp))
-                    Text(label, color = p.text, fontSize = 12.sp, maxLines = 1)
+                    Text(tile.label, color = p.text, fontSize = 12.sp, maxLines = 1)
                 }
             }
             repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
@@ -227,6 +232,24 @@ private fun TabsSheet(controller: BrowserController, close: () -> Unit) {
             onClick = { controller.newTab(); close() },
             size = 40.dp, background = p.accent,
         ) { Icon(CuteIcons.Plus, "新建标签页", tint = p.onAccent, modifier = Modifier.size(22.dp)) }
+    }
+    if (controller.tabs.any { it.incognito }) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(50))
+                .background(p.lavender)
+                .bouncyClick { controller.exitIncognito(); close() }
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            Icon(CuteIcons.Mask, null, tint = p.text, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("结束隐身", color = p.text, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        }
+        Text("会关掉全部隐身标签，并清掉这次隐身留下的数据", color = p.subText, fontSize = 11.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 4.dp))
+        Spacer(Modifier.height(8.dp))
     }
     LazyColumn(
         Modifier.heightIn(max = 460.dp),

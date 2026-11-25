@@ -434,6 +434,33 @@ class BrowserController(
         if (!url.isNullOrBlank()) load(tab, url)
     }
 
+    /** 菜单里的隐身开关：看的是当前标签。开着再点一次是退出，不会又开一个新的隐身页。 */
+    fun toggleIncognito() {
+        if (current.incognito) exitIncognito() else enterIncognito()
+    }
+
+    /**
+     * 进入隐身。已经有隐身标签时切到最近用过的那个，不重复开；
+     * 想再开一个请用标签页里的「新建隐身标签」。
+     */
+    fun enterIncognito() {
+        val existing = tabs.filter { it.incognito }.maxByOrNull { it.lastUsed }
+        if (existing != null) switchTo(tabs.indexOf(existing))
+        else newTab(incognito = true)
+    }
+
+    /**
+     * 退出隐身（和 Chrome 一样）：关掉全部隐身标签，并清掉这次隐身会话的 Cookie / 缓存 / 网站存储。
+     * 然后回到最近用过的普通标签；一个都没有就新建一个。
+     */
+    fun exitIncognito() {
+        if (tabs.none { it.incognito }) return
+        val fallback = tabs.filter { !it.incognito }.maxByOrNull { it.lastUsed }
+        tabs.filter { it.incognito }.toList().forEach { closeTab(it) }
+        if (fallback != null && fallback in tabs) switchTo(tabs.indexOf(fallback))
+        toast("已退出隐身，刚才的隐身标签都关掉啦 🎭")
+    }
+
     fun switchTo(index: Int) {
         if (index in tabs.indices) {
             currentIndex = index
@@ -515,11 +542,6 @@ class BrowserController(
             else -> currentIndex.coerceAtMost(tabs.lastIndex)
         }
         touch(current)
-    }
-
-    /** 关闭所有隐身标签（菜单里"结束隐身"） */
-    fun closeAllIncognito() {
-        tabs.filter { it.incognito }.forEach { closeTab(it) }
     }
 
     /** 最后一个隐身标签关掉了：删掉整个隐身 profile（Cookie、缓存、网站存储一起删） */

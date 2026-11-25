@@ -13,6 +13,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -47,6 +48,23 @@ class ScreenshotTest {
     @get:Rule
     val rule = createAndroidComposeRule<MainActivity>()
 
+    private fun waitForBrowser() {
+        // 主题和会话是异步读的。完整套件更慢，若一上来就把时钟停掉，主线程协程被冻住，界面会一直是空白底色。
+        // 不能用 waitUntil/waitForIdle：主页小兔子的耳朵是无限动画，autoAdvance 开着时永远等不到空闲。
+        rule.mainClock.autoAdvance = true
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline) {
+            Thread.sleep(50)
+            org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            rule.mainClock.advanceTimeBy(200)
+            if (runCatching { rule.onAllNodesWithContentDescription("菜单").fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false)) {
+                rule.mainClock.autoAdvance = false
+                return
+            }
+        }
+        rule.mainClock.autoAdvance = false
+    }
+
     private fun settle() {
         repeat(6) {
             Thread.sleep(150) // 让 DataStore 的 IO 协程有时间写入
@@ -65,7 +83,9 @@ class ScreenshotTest {
 
     @Test
     fun appFlow() {
+        waitForBrowser()
         rule.mainClock.autoAdvance = false
+        try {
         settle()
         captureScreenRoboImage("$OUT/01_home_strawberry.png")
 
@@ -112,17 +132,22 @@ class ScreenshotTest {
         captureScreenRoboImage("$OUT/12_security_more.png")
         androidx.test.espresso.Espresso.pressBack(); settle()
 
-        // 隐身标签
+        // 隐身模式（菜单开关：进入后再打开菜单应显示「结束隐身」）
         rule.onNodeWithContentDescription("菜单").performClick(); settle()
-        rule.onNodeWithText("隐身标签").performClick(); settle()
+        rule.onNodeWithText("隐身模式").performClick(); settle()
         captureScreenRoboImage("$OUT/13_incognito_home.png")
+        rule.onNodeWithContentDescription("菜单").performClick(); settle()
+        captureScreenRoboImage("$OUT/18_incognito_menu.png")
+        androidx.test.espresso.Espresso.pressBack(); settle()
         rule.onNodeWithText("2").performClick(); settle()
         captureScreenRoboImage("$OUT/14_tabs_incognito.png")
         androidx.test.espresso.Espresso.pressBack(); settle()
+        } finally { rule.mainClock.autoAdvance = true }
     }
 
     @Test
     fun securityDialogs() {
+        waitForBrowser()
         rule.mainClock.autoAdvance = false
         settle()
         val act = rule.activity
