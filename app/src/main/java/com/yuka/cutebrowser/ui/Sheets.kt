@@ -1,7 +1,10 @@
 package com.yuka.cutebrowser.ui
 
 import androidx.activity.compose.BackHandler
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -48,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yuka.cutebrowser.browser.BrowserController
 import com.yuka.cutebrowser.browser.UrlUtils
+import com.yuka.cutebrowser.CrashLog
 import com.yuka.cutebrowser.browser.AdBlocker
 import com.yuka.cutebrowser.browser.DlStatus
 import com.yuka.cutebrowser.browser.DownloadItem
@@ -394,6 +398,7 @@ private fun EntryListSheet(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SettingsSheet(controller: BrowserController, repo: CuteRepository, onClose: () -> Unit, onSecurity: () -> Unit) {
     val p = LocalCutePalette.current
@@ -486,7 +491,19 @@ private fun SettingsSheet(controller: BrowserController, repo: CuteRepository, o
         Text(
             "唔姆唔姆 v$versionName · 用爱心制作 💕",
             color = p.subText, fontSize = 12.sp,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .combinedClickable(
+                    onClick = {},
+                    onLongClick = {
+                        val ok = CrashLog.copyToClipboard(ctx)
+                        Toast.makeText(
+                            ctx,
+                            if (ok) "已复制上次的崩溃日志，可以发给兔兔帮你看" else "还没有崩溃记录哦",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    },
+                ),
         )
         Text(
             "过滤规则：EasyList、EasyPrivacy（The EasyList authors，CC BY-SA 3.0 / GPLv3，easylist.to，已去掉注释和通用元素隐藏规则）· AdAway hosts（CC BY 3.0）",

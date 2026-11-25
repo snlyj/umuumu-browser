@@ -566,7 +566,7 @@ class BrowserController(
 
     /** 地址栏提交：网址或搜索词 */
     fun submit(input: String) {
-        val url = UrlUtils.toUrl(input, engine)
+        val url = runCatching { UrlUtils.toUrl(input, engine) }.getOrDefault("")
         if (url.isNotEmpty()) load(current, url)
     }
 

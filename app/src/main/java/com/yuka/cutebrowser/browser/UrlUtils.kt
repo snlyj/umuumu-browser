@@ -27,16 +27,15 @@ object UrlUtils {
      * 粘贴时常会带上换行和后面的说明（比如「登录…」）：如果第一行、或去掉换行后的内容是网址，就打开它；
      * 整段里只有一个 http(s) 链接时也打开那个链接，而不是把整段拿去搜索。
      */
-    fun toUrl(input: String, engine: SearchEngine): String {
-        val text = input.trim()
-        if (text.isEmpty()) return ""
-        asDirectUrl(text)?.let { return it }
+    fun toUrl(input: String, engine: SearchEngine): String = runCatching {
+        val text = AddressInput.sanitizeText(input).trim()
+        if (text.isEmpty()) return@runCatching ""
+        asDirectUrl(text)?.let { return@runCatching it }
         val firstLine = text.lineSequence().first().trim()
-        if (firstLine.isNotEmpty() && firstLine != text) asDirectUrl(firstLine)?.let { return it }
-        extractSingleHttpUrl(text)?.let { asDirectUrl(it)?.let { u -> return u } }
-        if (text.any { it.isWhitespace() }) return engine.searchUrl(text)
-        return engine.searchUrl(text)
-    }
+        if (firstLine.isNotEmpty() && firstLine != text) asDirectUrl(firstLine)?.let { return@runCatching it }
+        extractSingleHttpUrl(text)?.let { asDirectUrl(it)?.let { u -> return@runCatching u } }
+        engine.searchUrl(text)
+    }.getOrDefault("")
 
     /** 一段输入本身就是一个可打开的网址（不是搜索词）时返回打开用的地址，否则 null */
     fun asDirectUrl(input: String): String? {

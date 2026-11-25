@@ -420,3 +420,36 @@ Settings disclaimer is now: 如果系统里设了 HTTP 代理（Clash 的 HTTP �
 
 ### Not runtime-verified
 Paste extraction, proxy CONNECT chaining, and the error-page copy are covered by unit tests. This box cannot reliably smoke-test a phone or AVD, and was not used to replay the user's Clash/VPN path or the sslip.io origin through LocalProxy. Whether Google and that site open on the user's phone with DoH + their Seattle proxy still needs a device check.
+
+## v1.6.4 — 主页复制/粘贴链接闪退、本地崩溃日志 (versionCode 11)
+
+User report (pt12u) after testing the v1.6.3 release APK on a real phone: 「我刚复制链接就闪退了，在主界面」— the app crashed the moment a link was copied, while 唔姆唔姆 was on its home/start page.
+
+### What was (and was not) in 1.6.3
+A full search of the 1.6.3 tree found **no** `ClipboardManager.OnPrimaryClipChangedListener`, no `LocalClipboardManager` reads, and no "paste and go" / copied-link chip. The only paste-related code was `UrlUtils.toUrl`, which runs when the user submits the address bar or a `WEB_SEARCH` intent — not when the system clipboard changes. Filter lists, DoH, and the home quick-links do not read the clipboard.
+
+So copying a link in another app should not have entered our code, unless the user (or the IME) then pasted it into the home-screen address bar (「搜索或输入网址 ✨」). In everyday Chinese, 「复制链接」often covers that whole copy-then-paste action. This is also the same kind of paste as the v1.6.3 report: a URL plus a newline plus Chinese (`登录…`).
+
+### Most likely cause
+`AddressBar` uses Compose `BasicTextField(singleLine = true)`. Pasting text that contains `\n` / `\r` (or a selection that then points past the filtered length) is a known Compose crash (`IllegalArgumentException` / `IndexOutOfBoundsException` in the text field's offset mapping). `onValueChange` previously stored the raw `TextFieldValue` unchanged, so a multiline link could crash the composition thread before `UrlUtils.toUrl` ever ran. That matches a flash-crash on the home screen at the moment the link is pasted, on a release APK (the same code path; not an R8-stripped symbol — `AddressInput` / `ClipboardUrl` are present in the 1.6.4 mapping).
+
+Less likely: a VIEW / WEB_SEARCH intent from an OEM "open copied link" helper; `handleIntent` / `submit` are now also wrapped in `runCatching`. The `embeddedHttp` regex has no nested quantifiers, so catastrophic backtracking was not the issue.
+
+### Fix
+- `AddressInput.sanitize`: replace newlines/tabs with spaces, drop other control characters, cap length, coerce the selection. `onValueChange` uses this inside `runCatching`. `UrlUtils.toUrl` sanitizes first as well.
+- `ClipboardUrl`: crash-proof reader for `ClipData` (plain text, URL, URL+newline+Chinese, null text, URI-only, HTML, very long text, empty clip, `SecurityException`). Reads and parsing stay off the UI thread when used from the UI.
+- Home screen shows a small 「打开复制的链接」banner only while the activity is resumed (Android 10+ forbids background clipboard reads). It never auto-opens the URL.
+- `CrashLog`: process-wide uncaught-exception handler writes the stack to app-private `files/last_crash.txt` (local only, no network). Hidden: long-press the version line in 设置 → About to copy the last crash log (or be told there isn't one). Installed from a tiny `UmuApp`.
+
+### Tests / artifacts
+- New `ClipboardUrlTest` (plain text, URL, URL+newline+Chinese, null text, URI-only, HTML, very long text, empty clip, SecurityException, clip-change listener, address-bar sanitize) and `CrashLogTest`.
+- `./gradlew testDebugUnitTest`: 123 tests, 2 skipped (`DohLiveTest`), 0 real failures. Three screenshot tests can still flake `waitForBrowser` in a full-suite run; they passed in isolation. Goldens were not re-recorded.
+- Release APK signed CN=UmuUmu, versionCode 11 / 1.6.4: 3,322,638 B (v1.6.3 3,322,614). Debug 13,084,681 B. Source zip 94 files, 1,452,821 B, no keystore/.git. R8 mapping saved at `/workspace/cute-browser-release/mapping-1.6.4.txt` (for reading a future deobfuscated crash log; not in the source zip).
+
+### What to check on the phone
+- On the home screen, paste a link that includes a newline and trailing Chinese into the address bar: the app should not crash; pressing Go should open the URL.
+- After copying a link with the app in the foreground, a mint banner 「打开复制的链接」may appear under the address bar; tapping it opens the site. It should not appear after leaving the app (pause).
+- If it ever crashes again: reopen 唔姆唔姆, 设置, long-press 「唔姆唔姆 v1.6.4 · 用爱心制作 💕」, and send the copied log.
+
+### Not runtime-verified
+Paste sanitization, clipboard reading, and crash-log IO are covered by unit tests. This box cannot reliably smoke-test a phone or AVD, so the original flash-crash was not reproduced on a device.

@@ -61,6 +61,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.yuka.cutebrowser.browser.AddressInput
 import com.yuka.cutebrowser.browser.BrowserController
 import com.yuka.cutebrowser.browser.TabState
 import com.yuka.cutebrowser.data.CuteRepository
@@ -119,6 +120,7 @@ fun BrowserScreen(controller: BrowserController, repo: CuteRepository, protectio
                 onRefresh = { controller.reloadOrStop() },
                 onShield = { shield = true },
             )
+            if (tab.isHome) CopiedLinkBanner(onOpen = { controller.open(it) })
             BunnyProgressBar(progress = { tab.progress }, visible = { tab.loading && !tab.isHome })
             Box(
                 Modifier
@@ -225,7 +227,7 @@ private fun AddressBar(
                 }
                 BasicTextField(
                     value = text,
-                    onValueChange = { text = it },
+                    onValueChange = { incoming -> text = runCatching { AddressInput.sanitize(incoming) }.getOrDefault(text) },
                     singleLine = true,
                     textStyle = TextStyle(color = p.text, fontSize = 15.sp),
                     cursorBrush = SolidColor(p.accent),

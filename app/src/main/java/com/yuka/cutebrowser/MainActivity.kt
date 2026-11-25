@@ -284,14 +284,16 @@ class MainActivity : FragmentActivity(), AppProtection {
         intent ?: return
         // 从"最近任务"里恢复进程时，系统会把当初启动它的 intent 再给一遍；不能因此又打开一次同一个链接
         if (initial && intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
-        when (intent.action) {
-            // 只收 http(s)：显式 intent 可以塞 javascript: / file: / content: 之类的地址，不能直接交给 WebView
-            Intent.ACTION_VIEW -> intent.dataString?.takeIf { UrlUtils.isWebUrl(it) }?.let { url ->
-                if (initial) controller.open(url) else controller.newTab(url)
-            }
-            Intent.ACTION_WEB_SEARCH -> intent.getStringExtra(SearchManager.QUERY)?.let { q ->
-                if (!initial) controller.newTab()
-                controller.submit(q)
+        runCatching {
+            when (intent.action) {
+                // 只收 http(s)：显式 intent 可以塞 javascript: / file: / content: 之类的地址，不能直接交给 WebView
+                Intent.ACTION_VIEW -> intent.dataString?.takeIf { UrlUtils.isWebUrl(it) }?.let { url ->
+                    if (initial) controller.open(url) else controller.newTab(url)
+                }
+                Intent.ACTION_WEB_SEARCH -> intent.getStringExtra(SearchManager.QUERY)?.let { q ->
+                    if (!initial) controller.newTab()
+                    controller.submit(q)
+                }
             }
         }
     }
