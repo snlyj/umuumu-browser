@@ -142,22 +142,22 @@ class MainActivity : FragmentActivity(), AppProtection {
                 runCatching { controller.setTzLangSites(repo.tzLangSites.first()) }
                 if (s.appLock && canLock()) locked = true
                 var wipe = false
-                val saved = withContext(Dispatchers.IO) {
+                val (saved, tabStates) = withContext(Dispatchers.IO) {
                     if (s.clearOnExit && clearMarker.exists()) {
                         // 上次没正常退出（比如从最近任务里划掉）：现在补清
                         SessionStore(applicationContext).clear()
                         repo.clearHistory()
                         File(cacheDir, "WebView").deleteRecursively() // WebView 还没加载，删缓存目录是安全的
                         wipe = true
-                        null
-                    } else controller.loadSession()
+                        null to emptyMap<Long, android.os.Bundle>()
+                    } else controller.loadSessionAndStates()
                 }
                 if (wipe) {
                     CookieManager.getInstance().removeAllCookies { clearMarker.delete() }
                     WebStorage.getInstance().deleteAllData()
                 }
                 DohManager.awaitInitial() // 开着加密 DNS 时，等代理生效后再加载第一个网页
-                controller.restore(saved)
+                controller.restore(saved, tabStates)
                 handleIntent(startIntent, initial = saved == null)
             } finally {
                 sessionReady = true

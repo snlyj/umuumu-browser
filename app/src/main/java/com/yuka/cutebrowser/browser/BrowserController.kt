@@ -82,6 +82,8 @@ class TabState(val id: Long, val incognito: Boolean = false) {
     var savedState: Bundle? = null
     /** 上次退出时存到磁盘的状态还没读 */
     var hasDiskState = false
+    /** 磁盘上 .state 文件的 id（恢复时如果和现有标签冲突会换新 id，读文件仍用原来的） */
+    var diskStateId: Long = id
     /** WebView 还没创建时要打开的网址 */
     var pendingUrl: String? = null
     /** 为了补 Accept-Language 刚用 loadUrl 重发过的网址（防止重复处理） */
@@ -290,23 +292,66 @@ class BrowserController(
     /** IO 线程调用 */
     fun loadSession(): SessionStore.Session? = session.load()
 
+    /** IO 线程调用：读会话 JSON，并把每个标签的 .state 一起读进内存，免得之后在主线程读文件 */
+    fun loadSessionAndStates(): Pair<SessionStore.Session?, Map<Long, Bundle>> {
+        val s = session.load() ?: return null to emptyMap()
+        val states = HashMap<Long, Bundle>()
+        s.tabs.forEach { t ->
+            if (t.url.isNotBlank()) session.readState(t.id)?.let { states[t.id] = it }
+        }
+        return s to states
+    }
+
     /** 用上次的标签页替换启动时那个空白标签（不创建任何 WebView，显示时才创建并恢复） */
-    fun restore(s: SessionStore.Session?) {
+    fun restore(s: SessionStore.Session?, states: Map<Long, Bundle> = emptyMap()) {
         if (s == null || s.tabs.isEmpty()) return
-        val fresh = tabs.size == 1 && tabs[0].url.isBlank() && tabs[0].webView == null
-        if (fresh) tabs.clear()
+        val blank = tabs.singleOrNull()?.takeIf {
+            it.url.isBlank() && it.webView == null && it.pendingUrl == null && it.savedState == null
+        }
+        if (blank != null) tabs.clear()
+        val used = tabs.mapTo(HashSet()) { it.id }
         s.tabs.forEach { st ->
-            tabs.add(TabState(st.id).apply {
+            var id = st.id
+            // 启动时那个空白标签、或恢复前已经建过的标签，不能跟会话里的 id 撞车（否则会共用同一个 .state 文件）
+            if (id < 1L || id in used) {
+                while (nextId in used || nextId < 1L) nextId++
+                id = nextId++
+            }
+            used += id
+            if (id >= nextId) nextId = id + 1
+            tabs.add(TabState(id).apply {
                 url = st.url
                 title = st.title.ifBlank { "新标签页" }
                 isHome = st.isHome || st.url.isBlank()
-                hasDiskState = st.url.isNotBlank()
+                diskStateId = st.id
+                savedState = states[st.id]
+                hasDiskState = savedState == null && st.url.isNotBlank()
             })
         }
-        nextId = (tabs.maxOf { it.id }) + 1
-        currentIndex = if (fresh) s.active.coerceIn(0, tabs.lastIndex) else tabs.lastIndex
+        nextId = maxOf(nextId, (used.maxOrNull() ?: 0L) + 1)
+        currentIndex = if (blank != null) s.active.coerceIn(0, tabs.lastIndex) else tabs.lastIndex
         touch(current)
+        prefetchDiskStates()
     }
+
+    /** 恢复时没带上的 .state（测试或旧调用路径）放到 IO 线程补读，读完再填回主线程 */
+    private fun prefetchDiskStates() {
+        val pending = tabs.filter { it.hasDiskState && it.savedState == null }.map { it to it.diskStateId }
+        if (pending.isEmpty()) return
+        ioScope.launch {
+            val loaded = pending.mapNotNull { (t, id) -> session.readState(id)?.let { t to it } }
+            if (loaded.isEmpty()) return@launch
+            main.post {
+                loaded.forEach { (t, b) ->
+                    if (t.webView == null && t.hasDiskState && t.savedState == null) {
+                        t.savedState = b
+                        t.hasDiskState = false
+                    }
+                }
+            }
+        }
+    }
+
 
     /** App 退到后台时调用：保存所有标签 + 各自的前进后退记录（写文件在 IO 线程） */
     fun saveSession() {
@@ -358,7 +403,8 @@ class BrowserController(
         tab.webView = v
         configureClients(tab, v)
 
-        val state = tab.savedState ?: if (tab.hasDiskState) session.readState(tab.id) else null
+        // .state 在启动时（IO 线程）或 prefetchDiskStates 里已经读进 savedState，这里不再读文件
+        val state = tab.savedState
         tab.savedState = null
         tab.hasDiskState = false
         val restored = state != null && runCatching { v.restoreState(state) != null }.getOrDefault(false)
