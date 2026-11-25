@@ -58,7 +58,17 @@ class FilterRequest(
     val pageHost: String?,
     val type: Int,
 ) {
-    val thirdParty: Boolean = pageHost == null || Domains.base(host) != Domains.base(pageHost)
+    /** 只有带 third-party / first-party 选项的规则才会问，所以按需再算（每个请求省掉两次 substring） */
+    val thirdParty: Boolean
+        get() {
+            var t = tp
+            if (t < 0) {
+                t = if (pageHost == null || Domains.base(host) != Domains.base(pageHost)) 1 else 0
+                tp = t
+            }
+            return t == 1
+        }
+    private var tp = -1
 }
 
 object Domains {

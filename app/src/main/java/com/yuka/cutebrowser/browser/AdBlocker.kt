@@ -50,7 +50,8 @@ object AdBlocker {
     @Volatile var loadInfo: String = "加载中…"
         private set
 
-    /** 必须在后台线程调用 */
+    /** 必须在后台线程调用。加了锁：Activity 重建时会再起一个加载线程，别让两个线程同时编译一遍 */
+    @Synchronized
     fun load(context: Context, cacheKey: String) {
         if (engine != null) return
         val t0 = SystemClock.elapsedRealtime()
