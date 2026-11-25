@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -100,7 +101,10 @@ fun DohSettingsSection() {
                         value = text, onValueChange = { text = it.trim() }, singleLine = true,
                         textStyle = TextStyle(color = p.text, fontSize = 13.sp),
                         cursorBrush = SolidColor(p.accent),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false,
+                            keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done,
+                        ),
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -109,7 +113,7 @@ fun DohSettingsSection() {
                     if (valid) upd { it.copy(customUrl = text) }
                 }
             }
-            if (text.isNotEmpty() && !valid) Text("要以 https:// 开头哦", color = p.accent, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+            if (text.isNotEmpty() && !valid) Text("要以 https:// 开头哦", color = p.accentInk, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
             Text("自定义服务器的域名会先用系统 DNS 查一次（填 IP 地址的网址就不用）", color = p.subText, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
         }
 

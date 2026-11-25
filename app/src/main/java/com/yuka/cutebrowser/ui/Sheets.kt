@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -36,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -46,6 +48,7 @@ import com.yuka.cutebrowser.browser.AdBlocker
 import com.yuka.cutebrowser.browser.DlStatus
 import com.yuka.cutebrowser.browser.DownloadItem
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -95,6 +98,7 @@ fun CuteSheets(
             Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
+                .imePadding() // 面板里有输入框（自定义 DoH 地址、搜时区…）：键盘弹出时内容跟着往上顶，不被挡住
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 16.dp),
         ) {
@@ -200,7 +204,7 @@ private fun MenuSheet(
                             .clip(RoundedCornerShape(22.dp))
                             .background(bgs[(r * 4 + c) % 3]),
                         contentAlignment = Alignment.Center,
-                    ) { Icon(icon, label, tint = p.accent, modifier = Modifier.size(26.dp)) }
+                    ) { Icon(icon, null, tint = p.accent, modifier = Modifier.size(26.dp)) }
                     Spacer(Modifier.height(6.dp))
                     Text(label, color = p.text, fontSize = 12.sp, maxLines = 1)
                 }
@@ -282,7 +286,7 @@ private fun EntryListSheet(
             ) {
                 Icon(CuteIcons.Trash, null, tint = p.accent, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("全部清空", color = p.accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text("全部清空", color = p.accentInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -302,7 +306,8 @@ private fun EntryListSheet(
         contentPadding = PaddingValues(vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(items, key = { "${it.url}#${it.time}" }) { e ->
+        // 序号也放进 key：万一有两条 url 和时间都一样的记录（旧数据/手改），LazyColumn 遇到重复 key 会直接崩溃
+        itemsIndexed(items, key = { i, it -> "${it.url}#${it.time}#$i" }) { _, e ->
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -335,6 +340,8 @@ private fun SettingsSheet(controller: BrowserController, repo: CuteRepository, o
     val engine by repo.engine.collectAsState(initial = SearchEngine.BING)
     val adBlock by repo.adBlock.collectAsState(initial = true)
     val webDark by repo.webDark.collectAsState(initial = true)
+    val ctx = LocalContext.current
+    val versionName = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull().orEmpty() }
 
     Column(Modifier.verticalScroll(rememberScrollState())) {
         SheetHeader("设置", "🌼")
@@ -415,7 +422,7 @@ private fun SettingsSheet(controller: BrowserController, repo: CuteRepository, o
 
         Spacer(Modifier.height(20.dp))
         Text(
-            "唔姆唔姆 v1.4 · 用爱心制作 💕",
+            "唔姆唔姆 v$versionName · 用爱心制作 💕",
             color = p.subText, fontSize = 12.sp,
             modifier = Modifier.align(Alignment.CenterHorizontally),
         )
@@ -460,7 +467,7 @@ internal fun ToggleRow(emoji: String, title: String, subtitle: String, checked: 
             .fillMaxWidth()
             .clip(RoundedCornerShape(22.dp))
             .background(p.pink.copy(alpha = 0.6f))
-            .bouncyClick(onToggle)
+            .bouncySwitch(checked, onToggle)
             .padding(horizontal = 18.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -518,7 +525,7 @@ private fun DownloadsSheet(controller: BrowserController) {
     val p = LocalCutePalette.current
     val scope = rememberCoroutineScope()
     var items by remember { mutableStateOf<List<DownloadItem>?>(null) }
-    var refresh by remember { mutableStateOf(0) }
+    var refresh by remember { mutableIntStateOf(0) }
     LaunchedEffect(refresh) {
         while (isActive) {
             val list = controller.downloads.list()
@@ -586,7 +593,7 @@ private fun DownloadsSheet(controller: BrowserController) {
                         DlStatus.PENDING -> "排队中…"
                         DlStatus.RUNNING -> if (d.total > 0) "${sizeText(d.soFar)} / ${sizeText(d.total)}" else "已下 ${sizeText(d.soFar)}"
                     }
-                    Text(status, color = if (d.status == DlStatus.FAILED) p.accent else p.subText, fontSize = 12.sp, maxLines = 1)
+                    Text(status, color = if (d.status == DlStatus.FAILED) p.accentInk else p.subText, fontSize = 12.sp, maxLines = 1)
                     if (d.active) {
                         val frac = if (d.total > 0) (d.soFar.toFloat() / d.total).coerceIn(0f, 1f) else 0.1f
                         val track = p.pink

@@ -4,26 +4,39 @@ import com.yuka.cutebrowser.privacy.locale.SiteTzLang
 import android.content.Context
 import androidx.compose.runtime.Immutable
 import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.yuka.cutebrowser.ui.theme.CuteThemeId
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.retryWhen
+import java.io.IOException
 import org.json.JSONArray
 import org.json.JSONObject
 
 /** 设置 + 书签 + 本地保存的下载（小数据） */
-private val Context.cuteDataStore: DataStore<Preferences> by preferencesDataStore(name = "cute_prefs")
+private val Context.cuteDataStore: DataStore<Preferences> by preferencesDataStore(
+    name = "cute_prefs",
+    // 文件损坏（断电/写一半）时当作空设置重新开始，而不是让每个收集设置的协程崩溃、App 一启动就闪退
+    corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
+)
 
 /** 历史记录单独一个文件：改设置时不会连带重写几百条历史，写历史也不会重写设置 */
-private val Context.historyDataStore: DataStore<Preferences> by preferencesDataStore(name = "cute_history")
+private val Context.historyDataStore: DataStore<Preferences> by preferencesDataStore(
+    name = "cute_history",
+    corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
+)
 
 @Immutable
 data class PageEntry(val url: String, val title: String, val time: Long)
@@ -73,6 +86,14 @@ class CuteRepository(context: Context) {
     private val ds = context.applicationContext.cuteDataStore
     private val hs = context.applicationContext.historyDataStore
 
+    // 读盘失败（IO 错误）时当作"还没有数据"，而不是把异常抛给 UI 里的 collect
+    private val dsData: Flow<Preferences> = safe(ds.data)
+    private val hsData: Flow<Preferences> = safe(hs.data)
+
+    private fun safe(f: Flow<Preferences>): Flow<Preferences> = f
+        .retryWhen { e, attempt -> if (e is IOException && attempt < 2) { delay(150); true } else false }
+        .catch { emit(emptyPreferences()) }
+
     private object Keys {
         val THEME = stringPreferencesKey("theme")
         val ENGINE = stringPreferencesKey("engine")
@@ -90,22 +111,22 @@ class CuteRepository(context: Context) {
         val TZ_SITES = stringPreferencesKey("tzlang_sites")
     }
 
-    val security: Flow<SecurityPrefs> = ds.data.map { it[Keys.SEC] }.distinctUntilChanged().map { decodeSec(it) }
+    val security: Flow<SecurityPrefs> = dsData.map { it[Keys.SEC] }.distinctUntilChanged().map { decodeSec(it) }
 
-    val sitePerms: Flow<List<SitePermEntry>> = ds.data.map { it[Keys.SITE_PERMS] }.distinctUntilChanged()
+    val sitePerms: Flow<List<SitePermEntry>> = dsData.map { it[Keys.SITE_PERMS] }.distinctUntilChanged()
         .map { decodePerms(it) }.flowOn(Dispatchers.Default)
 
     /** 用户点过"仍然用 http 打开"的网站 */
-    val httpAllowed: Flow<Set<String>> = ds.data.map { it[Keys.HTTP_OK] }.distinctUntilChanged().map { decodeSet(it) }
+    val httpAllowed: Flow<Set<String>> = dsData.map { it[Keys.HTTP_OK] }.distinctUntilChanged().map { decodeSet(it) }
 
     /** 用户关掉了拦截的网站 */
-    val adBlockOff: Flow<Set<String>> = ds.data.map { it[Keys.AD_OFF] }.distinctUntilChanged().map { decodeSet(it) }
+    val adBlockOff: Flow<Set<String>> = dsData.map { it[Keys.AD_OFF] }.distinctUntilChanged().map { decodeSet(it) }
 
     /** 用户关掉防指纹的网站（eTLD+1） */
-    val fpOff: Flow<Set<String>> = ds.data.map { it[Keys.FP_OFF] }.distinctUntilChanged().map { decodeSet(it) }
+    val fpOff: Flow<Set<String>> = dsData.map { it[Keys.FP_OFF] }.distinctUntilChanged().map { decodeSet(it) }
 
     /** 单个网站的时区/语言覆盖（按 eTLD+1） */
-    val tzLangSites: Flow<Map<String, SiteTzLang>> = ds.data.map { it[Keys.TZ_SITES] }.distinctUntilChanged().map { decodeSites(it) }
+    val tzLangSites: Flow<Map<String, SiteTzLang>> = dsData.map { it[Keys.TZ_SITES] }.distinctUntilChanged().map { decodeSites(it) }
 
     suspend fun setSiteTzLang(site: String, v: SiteTzLang?) {
         ds.edit { p ->
@@ -127,8 +148,8 @@ class CuteRepository(context: Context) {
             val o = JSONObject(s)
             val out = LinkedHashMap<String, SiteTzLang>()
             for (k in o.keys()) {
-                val e = o.getJSONObject(k)
-                val v = SiteTzLang(if (e.has("z")) e.getString("z") else null, if (e.has("g")) e.getString("g") else null)
+                val e = o.optJSONObject(k) ?: continue
+                val v = SiteTzLang(if (e.has("z")) e.optString("z") else null, if (e.has("g")) e.optString("g") else null)
                 if (!v.isEmpty) out[k] = v
             }
             out
@@ -161,18 +182,18 @@ class CuteRepository(context: Context) {
         }
     }
 
-    private fun decodeSet(s: String?): Set<String> {
+    internal fun decodeSet(s: String?): Set<String> {
         if (s.isNullOrBlank()) return emptySet()
-        return runCatching { val a = JSONArray(s); (0 until a.length()).mapTo(HashSet()) { a.getString(it) } }.getOrDefault(emptySet())
+        return runCatching { val a = JSONArray(s); (0 until a.length()).mapNotNullTo(HashSet()) { a.optString(it).takeIf { v -> v.isNotEmpty() } } }.getOrDefault(emptySet())
     }
 
-    private fun encodeSec(x: SecurityPrefs): String = JSONObject()
+    internal fun encodeSec(x: SecurityPrefs): String = JSONObject()
         .put("https", x.httpsOnly).put("3pc", x.blockThirdPartyCookies).put("rtc", x.webrtcProtect).put("ua", x.genericUa)
         .put("gpc", x.dntGpc).put("autofill", x.autofill).put("secure", x.secureScreen).put("lock", x.appLock)
         .put("clear", x.clearOnExit).put("fp", x.antiFp).put("fps", x.fpStrict)
         .put("tzon", x.tzOn).put("tz", x.tz).put("lang", x.lang).toString()
 
-    private fun decodeSec(s: String?): SecurityPrefs {
+    internal fun decodeSec(s: String?): SecurityPrefs {
         val d = SecurityPrefs()
         if (s.isNullOrBlank()) return d
         return runCatching {
@@ -191,37 +212,37 @@ class CuteRepository(context: Context) {
         list.forEach { put(JSONObject().put("o", it.origin).put("p", it.perm.name).put("a", it.allow)) }
     }.toString()
 
-    private fun decodePerms(s: String?): List<SitePermEntry> {
+    internal fun decodePerms(s: String?): List<SitePermEntry> {
         if (s.isNullOrBlank()) return emptyList()
         return runCatching {
             val arr = JSONArray(s)
             (0 until arr.length()).mapNotNull { i ->
-                val o = arr.getJSONObject(i)
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
                 val perm = SitePerm.entries.firstOrNull { it.name == o.optString("p") } ?: return@mapNotNull null
                 SitePermEntry(o.optString("o"), perm, o.optBoolean("a"))
             }
         }.getOrDefault(emptyList())
     }
 
-    val theme: Flow<CuteThemeId> = ds.data.map { p ->
+    val theme: Flow<CuteThemeId> = dsData.map { p ->
         CuteThemeId.entries.firstOrNull { it.name == p[Keys.THEME] } ?: CuteThemeId.STRAWBERRY
     }.distinctUntilChanged()
 
-    val engine: Flow<SearchEngine> = ds.data.map { p ->
+    val engine: Flow<SearchEngine> = dsData.map { p ->
         SearchEngine.entries.firstOrNull { it.name == p[Keys.ENGINE] } ?: SearchEngine.BING
     }.distinctUntilChanged()
 
-    val adBlock: Flow<Boolean> = ds.data.map { it[Keys.ADBLOCK] ?: true }.distinctUntilChanged()
+    val adBlock: Flow<Boolean> = dsData.map { it[Keys.ADBLOCK] ?: true }.distinctUntilChanged()
 
     /** 网页跟随主题变暗（只在深色主题下生效），默认开 */
-    val webDark: Flow<Boolean> = ds.data.map { it[Keys.WEB_DARK] ?: true }.distinctUntilChanged()
+    val webDark: Flow<Boolean> = dsData.map { it[Keys.WEB_DARK] ?: true }.distinctUntilChanged()
 
     // 先比较原始字符串，没变就不重新解析 JSON；解析放在后台线程
-    val bookmarks: Flow<List<PageEntry>> = ds.data.map { it[Keys.BOOKMARKS] }.distinctUntilChanged()
+    val bookmarks: Flow<List<PageEntry>> = dsData.map { it[Keys.BOOKMARKS] }.distinctUntilChanged()
         .map { decode(it) }.flowOn(Dispatchers.Default)
-    val history: Flow<List<PageEntry>> = hs.data.map { it[Keys.H] }.distinctUntilChanged()
+    val history: Flow<List<PageEntry>> = hsData.map { it[Keys.H] }.distinctUntilChanged()
         .map { decode(it) }.flowOn(Dispatchers.Default)
-    val localDownloads: Flow<List<LocalDownload>> = ds.data.map { it[Keys.LOCAL_DL] }.distinctUntilChanged()
+    val localDownloads: Flow<List<LocalDownload>> = dsData.map { it[Keys.LOCAL_DL] }.distinctUntilChanged()
         .map { decodeLocal(it) }.flowOn(Dispatchers.Default)
 
     suspend fun setTheme(id: CuteThemeId) { ds.edit { it[Keys.THEME] = id.name } }
@@ -231,7 +252,7 @@ class CuteRepository(context: Context) {
 
     /** 把旧版本放在主文件里的历史搬到单独的历史文件（只做一次，很快） */
     suspend fun migrateIfNeeded() {
-        val old = ds.data.first()[Keys.HISTORY] ?: return
+        val old = dsData.first()[Keys.HISTORY] ?: return
         hs.edit { if (it[Keys.H].isNullOrBlank()) it[Keys.H] = old }
         ds.edit { it.remove(Keys.HISTORY) }
     }
@@ -283,13 +304,15 @@ class CuteRepository(context: Context) {
         list.forEach { put(JSONObject().put("u", it.url).put("t", it.title).put("d", it.time)) }
     }.toString()
 
-    private fun decode(s: String?): List<PageEntry> {
+    internal fun decode(s: String?): List<PageEntry> {
         if (s.isNullOrBlank()) return emptyList()
         return runCatching {
             val arr = JSONArray(s)
-            List(arr.length()) { i ->
-                val o = arr.getJSONObject(i)
-                PageEntry(o.optString("u"), o.optString("t"), o.optLong("d"))
+            // 单条损坏只丢掉那一条，不连累整个列表
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val u = o.optString("u")
+                if (u.isEmpty()) null else PageEntry(u, o.optString("t"), o.optLong("d"))
             }
         }.getOrDefault(emptyList())
     }
@@ -300,13 +323,14 @@ class CuteRepository(context: Context) {
         }
     }.toString()
 
-    private fun decodeLocal(s: String?): List<LocalDownload> {
+    internal fun decodeLocal(s: String?): List<LocalDownload> {
         if (s.isNullOrBlank()) return emptyList()
         return runCatching {
             val arr = JSONArray(s)
-            List(arr.length()) { i ->
-                val o = arr.getJSONObject(i)
-                LocalDownload(o.optString("u"), o.optString("t"), o.optString("m"), o.optLong("s"), o.optLong("d"))
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val u = o.optString("u")
+                if (u.isEmpty()) null else LocalDownload(u, o.optString("t"), o.optString("m"), o.optLong("s"), o.optLong("d"))
             }
         }.getOrDefault(emptyList())
     }

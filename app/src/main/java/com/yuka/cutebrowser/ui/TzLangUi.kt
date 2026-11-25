@@ -109,7 +109,7 @@ private fun ValueRow(emoji: String, title: String, value: String, onClick: () ->
             Text(title, color = p.text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
             Text(value, color = p.subText, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
-        Text("›", color = p.accent, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text("›", color = p.accentInk, fontSize = 22.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -131,7 +131,7 @@ private fun SearchBox(value: String, hint: String, keyboard: KeyboardType = Keyb
         BasicTextField(
             value = value, onValueChange = onChange, singleLine = true,
             textStyle = TextStyle(color = p.text, fontSize = 14.sp), cursorBrush = SolidColor(p.accent),
-            keyboardOptions = KeyboardOptions(keyboardType = keyboard, imeAction = ImeAction.Search),
+            keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = keyboard, imeAction = ImeAction.Search),
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -144,7 +144,7 @@ private fun PickerFrame(title: String, onDismiss: () -> Unit, content: @Composab
     val p = LocalCutePalette.current
     Dialog(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(30.dp)).background(p.surface).padding(18.dp)) {
-            Text(title, color = p.accent, fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
+            Text(title, color = p.accentInk, fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
             content()
         }
     }
@@ -165,7 +165,7 @@ private fun PickList(items: List<PickItem>, selected: String?, onPick: (String?)
                     Text(it.title, color = p.text, fontSize = 14.sp, fontWeight = if (on) FontWeight.Bold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (it.sub.isNotEmpty()) Text(it.sub, color = p.subText, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                if (on) Text("✓", color = p.accent, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                if (on) Text("✓", color = p.accentInk, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -181,13 +181,16 @@ fun TzPickerDialog(current: String?, global: Boolean, onPick: (String?) -> Unit,
     PickerFrame("选时区 🕒", onDismiss) {
         SearchBox(q, "搜索：东京、Tokyo、UTC+9…") { q = it }
         Spacer(Modifier.height(10.dp))
-        val head = buildList {
-            if (!global) add(PickItem(null, "跟随全局设置"))
-            add(if (global) PickItem("", "跟随系统") else PickItem(TzLang.REAL, "用系统真实时区"))
-            add(PickItem(TzLang.RANDOM, "每个网站随机", "同一个网站这次打开 App 期间不变，不同网站不一样"))
+        // 约 600 个时区，每项都要算偏移文字：只在搜索词变化时重算，不要每次重组都算一遍
+        val items = remember(q, global) {
+            val zones = TzLang.searchZones(q).map { PickItem(it.id, if (it.label.isNotEmpty()) it.label else it.id, "${it.id} · ${TzLang.offsetLabel(it.id)}") }
+            if (q.isBlank()) buildList {
+                if (!global) add(PickItem(null, "跟随全局设置"))
+                add(if (global) PickItem("", "跟随系统") else PickItem(TzLang.REAL, "用系统真实时区"))
+                add(PickItem(TzLang.RANDOM, "每个网站随机", "同一个网站这次打开 App 期间不变，不同网站不一样"))
+                addAll(zones)
+            } else zones
         }
-        val items = if (q.isBlank()) head + TzLang.searchZones("").map { PickItem(it.id, if (it.label.isNotEmpty()) it.label else it.id, "${it.id} · ${TzLang.offsetLabel(it.id)}") }
-        else TzLang.searchZones(q).map { PickItem(it.id, if (it.label.isNotEmpty()) it.label else it.id, "${it.id} · ${TzLang.offsetLabel(it.id)}") }
         PickList(items, current) { onPick(it); onDismiss() }
     }
 }
@@ -214,7 +217,7 @@ fun LangPickerDialog(current: String?, global: Boolean, onPick: (String?) -> Uni
                     .bouncyClick { if (norm != null) { onPick(norm); onDismiss() } }.padding(horizontal = 16.dp, vertical = 10.dp),
             ) { Text("用它", color = p.onAccent, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
         }
-        if (custom.isNotBlank() && norm == null) Text("格式像 en-US、zh-TW、pt-BR 这样哦", color = p.accent, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, start = 4.dp))
+        if (custom.isNotBlank() && norm == null) Text("格式像 en-US、zh-TW、pt-BR 这样哦", color = p.accentInk, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, start = 4.dp))
         else if (norm != null && norm != custom.trim()) Text("会用：$norm", color = p.subText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, start = 4.dp))
     }
 }
@@ -228,7 +231,7 @@ fun SiteTzLangDialog(host: String, controller: BrowserController, onDismiss: () 
     val g = controller.sec
     Dialog(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(30.dp)).background(p.surface).padding(22.dp)) {
-            Text("🌏 ${com.yuka.cutebrowser.privacy.fingerprint.FpSeed.site(host)}", color = p.accent, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("🌏 ${com.yuka.cutebrowser.privacy.fingerprint.FpSeed.site(host)}", color = p.accentInk, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text("只对这个网站（和它的子域名）生效，改完会重新加载页面", color = p.subText, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp, bottom = 12.dp))
             ValueRow("🕒", "时区", v.tz?.let { TzLang.zoneLabel(it) } ?: "跟随全局设置（${TzLang.zoneLabel(g.tz)}）") { pick = "tz" }
             Spacer(Modifier.height(10.dp))
@@ -272,6 +275,6 @@ fun SiteTzLangRow(host: String, controller: BrowserController, onOpen: () -> Uni
             Text("这个网站的时区和语言", color = p.text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
             Text(sub, color = p.subText, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Text("›", color = p.accent, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text("›", color = p.accentInk, fontSize = 22.sp, fontWeight = FontWeight.Bold)
     }
 }
