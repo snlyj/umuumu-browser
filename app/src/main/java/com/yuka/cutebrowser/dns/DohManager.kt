@@ -74,6 +74,12 @@ object DohManager {
     private val _status = MutableStateFlow(DohStatus())
     val status: StateFlow<DohStatus> = _status
 
+    /**
+     * 明文 http 请求经过本地代理时，让它把 Accept-Language 换成这个网站该用的（host → 请求头，null = 不动）。
+     * 只对 http 有效：https 走 CONNECT 隧道，代理看不到也改不了请求头。
+     */
+    @Volatile var acceptLanguageFor: ((String) -> String?)? = null
+
     /** 退回系统 DNS 时的提示（MainActivity 接到 toast 上） */
     @Volatile var notice: ((String) -> Unit)? = null
     @Volatile private var lastNoticeAt = 0L

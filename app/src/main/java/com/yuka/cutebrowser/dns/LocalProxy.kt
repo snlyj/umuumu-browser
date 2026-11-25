@@ -123,6 +123,11 @@ class LocalProxy(
                     if (l.isEmpty()) continue
                     val name = l.substringBefore(':').trim().lowercase()
                     if (name == "proxy-connection" || name == "proxy-authorization" || name == "connection" || name == "keep-alive") continue
+                    if (name == "accept-language") {
+                        // 伪造语言时：明文请求的 Accept-Language 换成该网站该用的（https 隧道里改不了）
+                        val al = runCatching { DohManager.acceptLanguageFor?.invoke(host) }.getOrNull()
+                        if (al != null) { sb.append("Accept-Language: ").append(al).append("\r\n"); continue }
+                    }
                     sb.append(l).append("\r\n")
                 }
                 sb.append("Connection: close\r\n\r\n")

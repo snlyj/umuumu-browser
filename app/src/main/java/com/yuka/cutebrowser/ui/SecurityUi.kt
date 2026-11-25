@@ -254,6 +254,12 @@ fun ShieldDialog(tab: TabState, controller: BrowserController, onDismiss: () -> 
                     onDismiss()
                 }
             }
+            if (controller.sec.tzOn && host.isNotBlank()) {
+                var showTz by remember { mutableStateOf(false) }
+                Spacer(Modifier.height(10.dp))
+                SiteTzLangRow(host, controller) { showTz = true }
+                if (showTz) SiteTzLangDialog(host, controller, onDismiss = { showTz = false; onDismiss() })
+            }
             if (fpOn && host.isNotBlank()) {
                 Spacer(Modifier.height(10.dp))
                 ToggleRow("🧬", "在这个网站防指纹", "验证码、网银或地图显示不正常时可以关掉试试", fpSiteOn) {
@@ -358,6 +364,11 @@ fun SecuritySheet(controller: BrowserController, repo: CuteRepository, protectio
                 controller.toast("好啦，又全部用 https 啦 🔒")
             }
         }
+
+        Spacer(Modifier.height(18.dp))
+        Label("时区与语言")
+        val tzSites by repo.tzLangSites.collectAsState(initial = emptyMap())
+        TzLangSection(sec, upd, tzSites) { scope.launch { repo.clearSiteTzLang() }; controller.setTzLangSites(emptyMap()) }
 
         Spacer(Modifier.height(18.dp))
         Label("加密 DNS")

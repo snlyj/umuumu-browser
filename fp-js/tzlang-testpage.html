@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>时区/语言自测</title></head><body>
+<pre id="o">running…</pre>
+<script>
+// 一大堆和时区、语言有关的 API 调用，把结果收集成 {名字: 字符串}。
+// chrome-locale-test.mjs 拿"真·Chrome 切到该时区/语言"的结果当标准答案，和"注入脚本伪造"的结果逐项对比。
+function battery(win) {
+  var R = {}, W = win || window, D = W.Date, I = W.Intl;
+  function t(k, f) { try { var v = f(); R[k] = typeof v === 'number' && v !== v ? 'NaN' : (typeof v === 'string' ? v : JSON.stringify(v)); } catch (e) { R[k] = 'ERR ' + e.name; } }
+  var TS = [
+    ['jan', Date.UTC(2026, 0, 15, 12)], ['jul', Date.UTC(2026, 6, 1, 12)],
+    ['nyBefore', Date.UTC(2026, 2, 8, 6, 59, 59)], ['nyAfter', Date.UTC(2026, 2, 8, 7)],
+    ['nyFallA', Date.UTC(2026, 10, 1, 5, 59, 59)], ['nyFallB', Date.UTC(2026, 10, 1, 6)],
+    ['euBefore', Date.UTC(2026, 2, 29, 0, 59, 59)], ['euAfter', Date.UTC(2026, 2, 29, 1)],
+    ['epoch', 0], ['y1900', Date.UTC(1900, 5, 1)], ['lmt1883', Date.UTC(1883, 10, 18, 12)], ['y1950', Date.UTC(1950, 6, 1)],
+    ['bc', -62198755200000], ['y9999', 253402300799000], ['y2100', Date.UTC(2100, 6, 1)], ['neg', -1], ['apia', Date.UTC(2011, 11, 30, 9)], ['ms', 1782907200123]
+  ];
+  TS.forEach(function (e) {
+    var k = e[0], d = new D(e[1]);
+    ['toString', 'toDateString', 'toTimeString', 'getFullYear', 'getMonth', 'getDate', 'getDay', 'getHours', 'getMinutes', 'getSeconds', 'getMilliseconds', 'getTimezoneOffset', 'getYear', 'toLocaleString', 'toLocaleDateString', 'toLocaleTimeString', 'toISOString', 'toUTCString', 'valueOf'].forEach(function (m) { t(k + '.' + m, function () { return d[m](); }); });
+    t(k + '.tpl', function () { return `${d}`; });
+    t(k + '.json', function () { return JSON.stringify(d); });
+    t(k + '.en', function () { return d.toLocaleString('en-US'); });
+    t(k + '.de-full', function () { return d.toLocaleString('de-DE', { dateStyle: 'full', timeStyle: 'long' }); });
+    t(k + '.opts', function () { return d.toLocaleString(undefined, { timeZoneName: 'short', hour12: false, weekday: 'long', month: 'long' }); });
+    t(k + '.fixedTz', function () { return d.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }); });
+    t(k + '.dtf', function () { return new I.DateTimeFormat().format(d); });
+    t(k + '.dtf2', function () { return I.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'medium' }).format(d); });
+    t(k + '.parts', function () { return new I.DateTimeFormat(undefined, { hour: 'numeric', minute: 'numeric', timeZoneName: 'long' }).formatToParts(d).map(function (p) { return p.value; }).join('|'); });
+  });
+  var C = [
+    ['ymd', function () { return new D(2026, 6, 1).getTime(); }], ['ymdh', function () { return new D(2026, 0, 15, 12, 30, 45, 678).getTime(); }],
+    ['gapNY', function () { return new D(2026, 2, 8, 2, 30).getTime(); }], ['overlapNY', function () { return new D(2026, 10, 1, 1, 30).getTime(); }],
+    ['gapEU', function () { return new D(2026, 2, 29, 2, 30).getTime(); }], ['overlapEU', function () { return new D(2026, 9, 25, 2, 30).getTime(); }],
+    ['y99', function () { return new D(99, 0, 1).getTime(); }], ['ym', function () { return new D(2026, 0).getTime(); }],
+    ['over', function () { return new D(2026, 13, 35, 25, 61, 61).getTime(); }], ['nan', function () { return new D(2026, NaN).getTime(); }],
+    ['strs', function () { return new D('1').getTime(); }],
+    ['isoLocal', function () { return new D('2026-07-01T12:00:00').getTime(); }], ['isoLocalMs', function () { return new D('2026-07-01T12:00:00.250').getTime(); }],
+    ['isoDate', function () { return new D('2026-07-01').getTime(); }], ['isoZ', function () { return new D('2026-07-01T12:00:00Z').getTime(); }],
+    ['isoOff', function () { return new D('2026-07-01T12:00:00+05:30').getTime(); }], ['isoMinute', function () { return new D('2026-07-01T12:00').getTime(); }],
+    ['long', function () { return new D('July 1, 2026 12:00:00').getTime(); }], ['longGmt', function () { return new D('Wed Jul 01 2026 12:00:00 GMT-0400 (EDT)').getTime(); }],
+    ['slash', function () { return new D('7/1/2026 12:00 PM').getTime(); }], ['slash2', function () { return new D('2026/07/01 12:00').getTime(); }],
+    ['space', function () { return new D('2026-07-01 12:00').getTime(); }], ['utcs', function () { return new D('Wed, 01 Jul 2026 12:00:00 GMT').getTime(); }],
+    ['est', function () { return new D('Jul 1 2026 12:00 EST').getTime(); }], ['dateOnlyLegacy', function () { return new D('Jul 1 2026').getTime(); }],
+    ['gapStr', function () { return new D('2026-03-08T02:30:00').getTime(); }], ['bad', function () { return new D('hello').getTime(); }],
+    ['parse', function () { return D.parse('2026-07-01T12:00:00'); }], ['parse2', function () { return D.parse('Jul 1 2026 12:00'); }], ['parseZ', function () { return D.parse('2026-07-01T12:00:00Z'); }],
+    ['copy', function () { return new D(new D(2026, 6, 1)).getTime(); }], ['num', function () { return new D(1782907200000).getTime(); }],
+    ['objPrim', function () { return new D({ valueOf: function () { return 5; } }).getTime(); }], ['objStr', function () { return new D({ toString: function () { return '2026-07-01T00:00:00'; }, valueOf: function () { return {}; } }).getTime(); }],
+    ['call', function () { return (typeof D()) + (D().length > 20); }], ['callStr', function () { return D().slice(0, 3) + D().slice(-1); }],
+    ['utc', function () { return D.UTC(2026, 6, 1); }], ['now', function () { return typeof D.now(); }],
+    ['subclass', function () { class X extends D { } var x = new X(2026, 6, 1, 3); return x.getTime() + '|' + (x instanceof D) + '|' + x.getHours(); }],
+  ];
+  C.forEach(function (e) { t('new.' + e[0], e[1]); });
+  var S = [
+    ['setMonth', function (d) { d.setMonth(1); }], ['setHours25', function (d) { d.setHours(25); }], ['setDate0', function (d) { d.setDate(0); }],
+    ['setFullYear', function (d) { return d.setFullYear(2027, 1, 29); }], ['setMinutes', function (d) { d.setMinutes(90, 30, 5); }], ['setMs', function (d) { d.setMilliseconds(1500); }],
+    ['setSeconds', function (d) { d.setSeconds(-5); }], ['setHoursDST', function (d) { d.setMonth(2, 8); d.setHours(2, 30); }], ['setHoursFall', function (d) { d.setMonth(10, 1); d.setHours(1, 30); }],
+    ['setYear', function (d) { d.setYear(99); }], ['setNaN', function (d) { d.setHours(NaN); }], ['setTime', function (d) { d.setTime(86400000); }],
+  ];
+  S.forEach(function (e) { t('set.' + e[0], function () { var d = new D(2026, 0, 31, 10, 0, 0); var r = e[1](d); return d.getTime() + '|' + r + '|' + d.toString(); }); });
+  t('set.nanDate', function () { var d = new D(NaN); var r = d.setHours(1); var r2 = d.setFullYear(2020); return r + '|' + r2 + '|' + d.toString(); });
+  t('set.invalid.str', function () { return new D(NaN).toString() + '|' + new D(NaN).toLocaleString() + '|' + new D(NaN).getHours(); });
+  t('setter.coerce', function () { var log = []; var d = new D(NaN); d.setHours({ valueOf: function () { log.push('h'); return 1; } }, { valueOf: function () { log.push('m'); return 1; } }); return log.join(); });
+  t('err.thisType', function () { try { D.prototype.getHours.call({}); } catch (e) { return e.name; } });
+  t('err.thisType2', function () { try { D.prototype.toString.call({}); } catch (e) { return e.name; } });
+  t('err.setter', function () { try { D.prototype.setHours.call({}, 1); } catch (e) { return e.name; } });
+  // Intl / 语言
+  t('dtf.resolved', function () { var o = I.DateTimeFormat().resolvedOptions(); return [o.locale, o.timeZone, o.calendar, o.numberingSystem].join('|'); });
+  t('dtf.resolved.new', function () { var o = new I.DateTimeFormat(undefined, { hour: 'numeric' }).resolvedOptions(); return [o.locale, o.timeZone, o.hourCycle, o.hour12].join('|'); });
+  t('dtf.resolved.explicit', function () { var o = new I.DateTimeFormat('en-US', { timeZone: 'Europe/Paris' }).resolvedOptions(); return [o.locale, o.timeZone].join('|'); });
+  t('nf.resolved', function () { return new I.NumberFormat().resolvedOptions().locale; });
+  t('nf.format', function () { return new I.NumberFormat().format(1234567.891) + '|' + new I.NumberFormat(undefined, { style: 'currency', currency: 'EUR' }).format(1234.5) + '|' + I.NumberFormat(undefined, { style: 'percent' }).format(0.256); });
+  t('num.toLocale', function () { return (1234567.891).toLocaleString() + '|' + (1234.5).toLocaleString(undefined, { style: 'currency', currency: 'USD' }) + '|' + (12345678901234567890n).toLocaleString(); });
+  t('num.toLocale.explicit', function () { return (1234567.891).toLocaleString('en-US'); });
+  t('collator', function () { return new I.Collator().resolvedOptions().locale + '|' + ['z', 'ä', 'a', '啊', 'b'].sort(new I.Collator().compare).join(''); });
+  t('localeCompare', function () { return ['z', 'ä', 'a', 'ö', 'o'].sort(function (a, b) { return a.localeCompare(b); }).join('') + '|' + 'a'.localeCompare('B') + '|' + 'ä'.localeCompare('z', 'sv'); });
+  t('upper', function () { return 'iı'.toLocaleUpperCase() + '|' + 'İI'.toLocaleLowerCase() + '|' + 'i'.toLocaleUpperCase('tr'); });
+  t('plural', function () { var p = new I.PluralRules(); return p.resolvedOptions().locale + '|' + [0, 1, 2, 5].map(function (n) { return p.select(n); }).join(); });
+  t('rtf', function () { var r = new I.RelativeTimeFormat(); return r.resolvedOptions().locale + '|' + r.format(-1, 'day') + '|' + new I.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(1, 'day'); });
+  t('list', function () { var l = new I.ListFormat(); return l.resolvedOptions().locale + '|' + l.format(['a', 'b', 'c']); });
+  t('displayNames', function () { return new I.DisplayNames(undefined, { type: 'region' }).of('US') + '|' + new I.DisplayNames(undefined, { type: 'language' }).of('fr'); });
+  t('segmenter', function () { return new I.Segmenter().resolvedOptions().locale; });
+  t('arr.toLocale', function () { return [1234.5, new D(0)].toLocaleString(); });
+  t('dtf.ctor.identity', function () { return (I.DateTimeFormat.prototype.constructor === I.DateTimeFormat) + '|' + (new I.DateTimeFormat() instanceof I.DateTimeFormat) + '|' + I.DateTimeFormat.name + '|' + I.DateTimeFormat.length + '|' + typeof I.DateTimeFormat.supportedLocalesOf; });
+  t('date.ctor.identity', function () { return (D.prototype.constructor === D) + '|' + (new D() instanceof D) + '|' + D.name + '|' + D.length + '|' + (Object.getPrototypeOf(new D()) === D.prototype) + '|' + (W.Date === D) + '|' + (Object.prototype.toString.call(new D())); });
+  t('toString.native', function () { return [D, D.parse, D.prototype.getHours, D.prototype.setHours, D.prototype.toString, D.prototype.toLocaleString, I.DateTimeFormat, I.NumberFormat, W.navigator.constructor.prototype.__lookupGetter__ && Object.getOwnPropertyDescriptor(W.Navigator.prototype, 'language').get].map(function (f) { return Function.prototype.toString.call(f); }).join(' ## '); });
+  t('proto.names', function () { return Object.getOwnPropertyNames(D.prototype).join(); });
+  t('fn.props', function () { var o = Object.getOwnPropertyDescriptor(D.prototype, 'getHours'); return [o.writable, o.enumerable, o.configurable, D.prototype.getHours.name, D.prototype.getHours.length, D.prototype.setHours.length, D.prototype.setFullYear.length, 'prototype' in D.prototype.getHours].join(); });
+  t('navigator.language', function () { return W.navigator.language; });
+  t('navigator.languages', function () { var a = W.navigator.languages; return JSON.stringify(a) + '|' + Object.isFrozen(a) + '|' + (a === W.navigator.languages); });
+  t('temporal.exists', function () { return typeof W.Temporal; });
+  if (W.Temporal) {
+    t('temporal.tzid', function () { return W.Temporal.Now.timeZoneId(); });
+    t('temporal.zdt', function () { return W.Temporal.Now.zonedDateTimeISO().timeZoneId + '|' + W.Temporal.Now.zonedDateTimeISO('Asia/Tokyo').timeZoneId; });
+    t('temporal.plain', function () { return typeof W.Temporal.Now.plainDateISO().toString() + W.Temporal.Now.plainDateISO().toString().length + W.Temporal.Now.plainTimeISO().toString().slice(0,2).length; });
+    t('temporal.plainDate-offset', function () { var a = W.Temporal.Now.plainDateTimeISO().toString(); var b = new D(); return Math.abs(Date.parse(a + 'Z') - (b.getTime() + b.getTimezoneOffset() * -60000)) < 5000; });
+    t('temporal.instant.locale', function () { return W.Temporal.Instant.from('2026-07-01T12:00:00Z').toLocaleString(); });
+    t('temporal.plainDate.locale', function () { return W.Temporal.PlainDate.from('2026-07-01').toLocaleString() + '|' + W.Temporal.PlainTime.from('13:05').toLocaleString(); });
+    t('temporal.zdt.locale', function () { return W.Temporal.ZonedDateTime.from('2026-07-01T12:00:00[Asia/Tokyo]').toLocaleString(); });
+    t('temporal.instant.zdt', function () { return W.Temporal.Instant.from('2026-07-01T12:00:00Z').toZonedDateTimeISO(W.Temporal.Now.timeZoneId()).toString(); });
+  }
+  return R;
+}
+async function run() {
+  var R = battery(window);
+  // 同源 iframe（新建的 about:blank，网页脚本拿到它之前脚本得先给它打补丁）
+  var f = document.createElement('iframe'); document.body.appendChild(f);
+  var FR = battery(f.contentWindow);
+  ['new.ymd', 'new.gapNY', 'dtf.resolved', 'navigator.language', 'jul.toString', 'jul.toLocaleString', 'nf.resolved', 'new.long', 'new.isoLocal'].forEach(function (k) { R['iframe.' + k] = FR[k]; });
+  // 子 frame 的 srcdoc
+  var f2 = document.createElement('iframe'); f2.srcdoc = '<script>parent.__srcdoc=[new Date(2026,6,1).getTime(),Intl.DateTimeFormat().resolvedOptions().timeZone,navigator.language].join("|")<\/script>'; document.body.appendChild(f2);
+  await new Promise(function (r) { f2.onload = r; setTimeout(r, 1500); });
+  R['iframe.srcdoc'] = window.__srcdoc || 'none';
+  window.__R = R; document.title = 'done'; document.getElementById('o').textContent = 'done';
+}
+run();
+</script></body></html>

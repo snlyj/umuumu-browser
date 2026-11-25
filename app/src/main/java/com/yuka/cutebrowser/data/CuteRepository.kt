@@ -1,5 +1,6 @@
 package com.yuka.cutebrowser.data
 
+import com.yuka.cutebrowser.privacy.locale.SiteTzLang
 import android.content.Context
 import androidx.compose.runtime.Immutable
 import androidx.datastore.core.DataStore
@@ -45,6 +46,9 @@ data class SecurityPrefs(
     val clearOnExit: Boolean = false,
     val antiFp: Boolean = true,            // 防指纹（v1.4）
     val fpStrict: Boolean = false,         // 防指纹严格级别：另外把时区设成 UTC、屏幕固定等
+    val tzOn: Boolean = false,             // 伪造时区和语言（v1.5，独立于防指纹）
+    val tz: String = "",                   // "" 跟随系统 / "*" 每个网站随机 / IANA 时区名
+    val lang: String = "",                 // "" 跟随系统 / BCP-47 标签
 )
 
 /** 网站权限种类 */
@@ -83,6 +87,7 @@ class CuteRepository(context: Context) {
         val HTTP_OK = stringPreferencesKey("http_allowed")
         val AD_OFF = stringPreferencesKey("adblock_off")
         val FP_OFF = stringPreferencesKey("fp_off")
+        val TZ_SITES = stringPreferencesKey("tzlang_sites")
     }
 
     val security: Flow<SecurityPrefs> = ds.data.map { it[Keys.SEC] }.distinctUntilChanged().map { decodeSec(it) }
@@ -98,6 +103,37 @@ class CuteRepository(context: Context) {
 
     /** 用户关掉防指纹的网站（eTLD+1） */
     val fpOff: Flow<Set<String>> = ds.data.map { it[Keys.FP_OFF] }.distinctUntilChanged().map { decodeSet(it) }
+
+    /** 单个网站的时区/语言覆盖（按 eTLD+1） */
+    val tzLangSites: Flow<Map<String, SiteTzLang>> = ds.data.map { it[Keys.TZ_SITES] }.distinctUntilChanged().map { decodeSites(it) }
+
+    suspend fun setSiteTzLang(site: String, v: SiteTzLang?) {
+        ds.edit { p ->
+            val m = decodeSites(p[Keys.TZ_SITES]).toMutableMap()
+            if (v == null || v.isEmpty) m.remove(site) else m[site] = v
+            p[Keys.TZ_SITES] = encodeSites(m)
+        }
+    }
+
+    suspend fun clearSiteTzLang() { ds.edit { it.remove(Keys.TZ_SITES) } }
+
+    internal fun encodeSites(m: Map<String, SiteTzLang>): String = JSONObject().apply {
+        m.forEach { (k, v) -> put(k, JSONObject().apply { v.tz?.let { put("z", it) }; v.lang?.let { put("g", it) } }) }
+    }.toString()
+
+    internal fun decodeSites(s: String?): Map<String, SiteTzLang> {
+        if (s.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val o = JSONObject(s)
+            val out = LinkedHashMap<String, SiteTzLang>()
+            for (k in o.keys()) {
+                val e = o.getJSONObject(k)
+                val v = SiteTzLang(if (e.has("z")) e.getString("z") else null, if (e.has("g")) e.getString("g") else null)
+                if (!v.isEmpty) out[k] = v
+            }
+            out
+        }.getOrDefault(emptyMap())
+    }
 
     suspend fun updateSecurity(f: (SecurityPrefs) -> SecurityPrefs) {
         ds.edit { p -> p[Keys.SEC] = encodeSec(f(decodeSec(p[Keys.SEC]))) }
@@ -133,7 +169,8 @@ class CuteRepository(context: Context) {
     private fun encodeSec(x: SecurityPrefs): String = JSONObject()
         .put("https", x.httpsOnly).put("3pc", x.blockThirdPartyCookies).put("rtc", x.webrtcProtect).put("ua", x.genericUa)
         .put("gpc", x.dntGpc).put("autofill", x.autofill).put("secure", x.secureScreen).put("lock", x.appLock)
-        .put("clear", x.clearOnExit).put("fp", x.antiFp).put("fps", x.fpStrict).toString()
+        .put("clear", x.clearOnExit).put("fp", x.antiFp).put("fps", x.fpStrict)
+        .put("tzon", x.tzOn).put("tz", x.tz).put("lang", x.lang).toString()
 
     private fun decodeSec(s: String?): SecurityPrefs {
         val d = SecurityPrefs()
@@ -145,6 +182,7 @@ class CuteRepository(context: Context) {
                 o.optBoolean("ua", d.genericUa), o.optBoolean("gpc", d.dntGpc), o.optBoolean("autofill", d.autofill),
                 o.optBoolean("secure", d.secureScreen), o.optBoolean("lock", d.appLock), o.optBoolean("clear", d.clearOnExit),
                 o.optBoolean("fp", d.antiFp), o.optBoolean("fps", d.fpStrict),
+                o.optBoolean("tzon", d.tzOn), o.optString("tz", d.tz), o.optString("lang", d.lang),
             )
         }.getOrDefault(d)
     }

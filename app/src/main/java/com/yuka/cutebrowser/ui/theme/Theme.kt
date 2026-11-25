@@ -6,6 +6,9 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -121,6 +124,9 @@ fun CuteTheme(id: CuteThemeId, incognito: Boolean = false, content: @Composable 
         }
     }
     CompositionLocalProvider(LocalCutePalette provides p) {
-        MaterialTheme(colorScheme = scheme, content = content)
+        // 默认 Locale 会被「伪造语言」改掉；界面永远是简体中文，固定用 zh-CN 选字形，避免汉字变成日文/韩文字形
+        MaterialTheme(colorScheme = scheme) {
+            ProvideTextStyle(TextStyle(localeList = LocaleList("zh-CN")), content)
+        }
     }
 }

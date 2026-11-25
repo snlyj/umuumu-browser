@@ -5,6 +5,8 @@ import android.webkit.WebView
 import androidx.webkit.ScriptHandler
 import androidx.webkit.WebViewCompat
 import com.yuka.cutebrowser.filter.Domains
+import com.yuka.cutebrowser.privacy.locale.SpoofConfig
+import com.yuka.cutebrowser.privacy.locale.TzLang
 import com.yuka.cutebrowser.security.WebFeatures
 import org.json.JSONArray
 import org.json.JSONObject
@@ -19,6 +21,9 @@ import java.util.WeakHashMap
  *  - 不同网站看到不同的值，没法拿来跨站关联；
  *  - 重启 App 换新密钥；隐身会话有自己的密钥，结束隐身就丢掉。
  *
+ * v1.5：同一份脚本还负责"伪造时区和语言"（[SpoofConfig]，见 privacy/locale/TzLang.kt）。它不依赖防指纹开关：
+ * 防指纹关着、时区/语言伪造开着时，脚本照样注入（配置里 l=0，只有时区/语言那部分起作用）。
+ *
  * 只在主线程调用。
  */
 class FingerprintShield(private val appContext: Context) {
@@ -29,6 +34,12 @@ class FingerprintShield(private val appContext: Context) {
     /** 用户关掉防指纹的网站（eTLD+1） */
     var exceptions: Set<String> = emptySet()
         private set
+    /** 伪造时区/语言的设置（没开就是 [SpoofConfig] 默认值） */
+    var spoof: SpoofConfig = SpoofConfig()
+        private set
+
+    /** 要不要往网页里注入脚本：防指纹开着，或时区/语言伪造有内容 */
+    val active: Boolean get() = enabled || spoof.hasEffect
 
     private val sessionKey = FpSeed.newKey()
     private var incognitoKey: String? = null
@@ -49,15 +60,27 @@ class FingerprintShield(private val appContext: Context) {
         val key = if (incognito) (incognitoKey ?: FpSeed.newKey().also { incognitoKey = it }) else sessionKey
         return JSONObject()
             .put("k", key)
-            .put("l", if (strict) 2 else 1)
+            .put("l", if (!enabled) 0 else if (strict) 2 else 1)
             .put("x", JSONArray(exceptions.sorted()))
             .put("p", JSONArray(Domains.SECOND_LEVEL.sorted()))
+            .apply {
+                if (spoof.on) {
+                    put("z", spoof.tz)
+                    put("g", spoof.lang)
+                    if (spoof.sites.isNotEmpty()) put("o", JSONObject().apply {
+                        spoof.sites.toSortedMap().forEach { (site, v) ->
+                            put(site, JSONObject().apply { v.tz?.let { put("z", it) }; v.lang?.let { put("g", it) } })
+                        }
+                    })
+                    if (spoof.tz == TzLang.RANDOM || spoof.sites.values.any { it.tz == TzLang.RANDOM }) put("rz", JSONArray(TzLang.RANDOM_POOL))
+                }
+            }
             .toString()
     }
 
-    /** 完整脚本；关掉时返回 null */
+    /** 完整脚本；防指纹和时区/语言伪造都没开时返回 null */
     fun script(incognito: Boolean): String? {
-        if (!enabled) return null
+        if (!active) return null
         val t = template
         val i = t.lastIndexOf(PLACEHOLDER)
         if (i < 0) return null
@@ -83,11 +106,12 @@ class FingerprintShield(private val appContext: Context) {
      * 设置变化：给还活着的 WebView 换上新脚本（不用重建 WebView，下一次加载页面生效）。
      * 返回是否真的变了（调用方据此决定要不要刷新当前页）。
      */
-    fun update(enabled: Boolean, strict: Boolean, exceptions: Set<String>, live: Collection<WebView>): Boolean {
-        if (enabled == this.enabled && strict == this.strict && exceptions == this.exceptions) return false
+    fun update(enabled: Boolean, strict: Boolean, exceptions: Set<String>, live: Collection<WebView>, spoof: SpoofConfig = this.spoof): Boolean {
+        if (enabled == this.enabled && strict == this.strict && exceptions == this.exceptions && spoof == this.spoof) return false
         this.enabled = enabled
         this.strict = strict
         this.exceptions = exceptions
+        this.spoof = spoof
         val alive = live.toHashSet()
         views.keys.retainAll(alive) // 已经销毁的 WebView 不再碰
         views.forEach { (wv, e) -> install(wv, e) }

@@ -52,6 +52,11 @@ import com.yuka.cutebrowser.data.SearchEngine
 import com.yuka.cutebrowser.data.SecurityPrefs
 import com.yuka.cutebrowser.privacy.fingerprint.FingerprintShield
 import com.yuka.cutebrowser.privacy.fingerprint.FpSeed
+import com.yuka.cutebrowser.privacy.locale.LangPolicy
+import com.yuka.cutebrowser.privacy.locale.ProcessLocale
+import com.yuka.cutebrowser.privacy.locale.SiteTzLang
+import com.yuka.cutebrowser.privacy.locale.SpoofConfig
+import com.yuka.cutebrowser.privacy.locale.TzLang
 import com.yuka.cutebrowser.data.SitePerm
 import com.yuka.cutebrowser.data.SitePermEntry
 import com.yuka.cutebrowser.security.HttpsUpgrade
@@ -75,6 +80,8 @@ class TabState(val id: Long, val incognito: Boolean = false) {
     var hasDiskState = false
     /** WebView 还没创建时要打开的网址 */
     var pendingUrl: String? = null
+    /** 为了补 Accept-Language 刚用 loadUrl 重发过的网址（防止重复处理） */
+    var langFixedUrl: String? = null
     var lastUsed = 0L
 
     var url by mutableStateOf("")
@@ -141,6 +148,8 @@ class BrowserController(
     /** 安全设置（见 [SecurityPrefs]） */
     @Volatile var sec = SecurityPrefs()
         private set
+    /** 每个网站单独的时区/语言（必须在 init 之前初始化） */
+    private var tzSites: Map<String, SiteTzLang> = emptyMap()
     /** 用户允许用 http 打开的网站（隐身模式下的选择只在本次有效） */
     @Volatile var httpAllowed: Set<String> = emptySet()
     private val incognitoHttpAllowed = HashSet<String>()
@@ -179,6 +188,8 @@ class BrowserController(
     val current: TabState get() = tabs[currentIndex.coerceIn(0, tabs.lastIndex)]
 
     init {
+        ProcessLocale.apply(LangPolicy.processLang(spoofConfig(), sec.antiFp)) // 必须在第一个 WebView 创建之前
+        DohManager.acceptLanguageFor = { host -> acceptLanguageFor("http://$host/") }
         newTab()
         activity.lifecycleScope.launch(Dispatchers.IO) { fingerprint.preload() }
     }
@@ -187,14 +198,59 @@ class BrowserController(
     fun applySecurity(new: SecurityPrefs) {
         val old = sec
         sec = new
-        if (old == new) return
+        val localeChanged = syncProcessLocale()
+        if (old == new && !localeChanged) return
         if (old.blockThirdPartyCookies != new.blockThirdPartyCookies) {
             tabs.forEach { t -> t.webView?.let { cookieManagerFor(t).setAcceptThirdPartyCookies(it, !new.blockThirdPartyCookies) } }
         }
         if (old.genericUa != new.genericUa || old.webrtcProtect != new.webrtcProtect || old.dntGpc != new.dntGpc || old.autofill != new.autofill) {
             rebuildWebViews()
+        } else if (localeChanged) {
+            rebuildWebViews() // WebView 只在创建时读进程语言来生成 Accept-Language，所以要重建（前进后退记录会保留）
         }
-        if (fingerprint.update(new.antiFp, new.fpStrict, fingerprint.exceptions, liveWebViews())) current.webView?.reload()
+        if (fingerprint.update(new.antiFp, new.fpStrict, fingerprint.exceptions, liveWebViews(), spoofConfig(new))) current.webView?.reload()
+    }
+
+    // ---------------- 时区 / 语言伪造 ----------------
+
+
+    private fun spoofConfig(s: SecurityPrefs = sec) = SpoofConfig(s.tzOn, s.tz, s.lang, tzSites)
+
+    /** 进程默认语言 = WebView 原生 Accept-Language 的来源；变了返回 true */
+    private fun syncProcessLocale(): Boolean = ProcessLocale.apply(LangPolicy.processLang(spoofConfig(), sec.antiFp))
+
+    /** 从 DataStore 读到的网站覆盖（启动时、以及盾牌菜单里改完之后） */
+    fun setTzLangSites(m: Map<String, SiteTzLang>) {
+        if (m == tzSites) return
+        tzSites = m
+        fingerprint.update(fingerprint.enabled, fingerprint.strict, fingerprint.exceptions, liveWebViews(), spoofConfig())
+    }
+
+    /** 盾牌菜单里改这个网站的时区/语言。null = 恢复跟随全局设置。改完用新请求头重新加载当前页 */
+    fun setSiteTzLang(host: String, v: SiteTzLang?) {
+        val site = FpSeed.site(host)
+        if (site.isEmpty()) return
+        setTzLangSites(if (v == null || v.isEmpty) tzSites - site else tzSites + (site to v))
+        activity.lifecycleScope.launch { repo.setSiteTzLang(site, v) }
+        reloadWithLang(current)
+    }
+
+    fun siteTzLang(host: String): SiteTzLang = tzSites[FpSeed.site(host)] ?: SiteTzLang()
+
+    /** 这个网址的主页面请求该用什么 Accept-Language。和 WebView 原生发的一样就返回 null（不用额外处理） */
+    fun acceptLanguageFor(url: String?): String? {
+        val host = runCatching { Uri.parse(url).host }.getOrNull() ?: return null
+        val site = FpSeed.site(host)
+        val eff = LangPolicy.effective(spoofConfig(), sec.antiFp, fingerprint.isExempt(host), site)
+        if (eff == ProcessLocale.current) return null
+        return TzLang.acceptLanguage(eff ?: ProcessLocale.systemTag())
+    }
+
+    /** reload() 不会带自定义请求头，所以需要时改用 loadUrl */
+    private fun reloadWithLang(tab: TabState) {
+        val v = tab.webView ?: return
+        val url = v.url ?: tab.url
+        if (acceptLanguageFor(url) != null) v.loadUrl(url, extraHeaders(url)) else v.reload()
     }
 
     private fun liveWebViews(): List<WebView> = tabs.mapNotNull { it.webView } + listOfNotNull(spare)
@@ -211,7 +267,7 @@ class BrowserController(
         val set = if (enabled) fingerprint.exceptions - site else fingerprint.exceptions + site
         fingerprint.update(fingerprint.enabled, fingerprint.strict, set, liveWebViews())
         activity.lifecycleScope.launch { repo.setFpOff(site, !enabled) }
-        current.webView?.reload()
+        reloadWithLang(current)
     }
 
     // ---------------- 会话保存 / 恢复 ----------------
@@ -293,8 +349,8 @@ class BrowserController(
         val pending = tab.pendingUrl
         tab.pendingUrl = null
         when {
-            pending != null -> v.loadUrl(pending, extraHeaders())
-            !restored && tab.url.isNotBlank() -> v.loadUrl(tab.url, extraHeaders())
+            pending != null -> v.loadUrl(pending, extraHeaders(pending))
+            !restored && tab.url.isNotBlank() -> v.loadUrl(tab.url, extraHeaders(tab.url))
         }
         tab.canGoBack = v.canGoBack()
         tab.canGoForward = v.canGoForward()
@@ -422,7 +478,7 @@ class BrowserController(
         tab.loading = true
         tab.progress = 5
         val v = tab.webView
-        if (v != null) v.loadUrl(url, extraHeaders()) else tab.pendingUrl = url // 界面显示出来时再创建 WebView 并加载
+        if (v != null) v.loadUrl(url, extraHeaders(url)) else tab.pendingUrl = url // 界面显示出来时再创建 WebView 并加载
         tab.isHome = false
     }
 
@@ -437,8 +493,15 @@ class BrowserController(
     }
 
     /** 主动加载时带上 DNT / Sec-GPC（网页里点链接、子资源 WebView 不让我们加请求头，靠注入的 JS 信号） */
-    private fun extraHeaders(): Map<String, String> =
-        if (sec.dntGpc) mapOf("DNT" to "1", "Sec-GPC" to "1") else emptyMap()
+    private fun extraHeaders(url: String? = null): Map<String, String> {
+        val al = if (url != null) acceptLanguageFor(url) else null
+        return when {
+            sec.dntGpc && al != null -> mapOf("DNT" to "1", "Sec-GPC" to "1", "Accept-Language" to al)
+            sec.dntGpc -> mapOf("DNT" to "1", "Sec-GPC" to "1")
+            al != null -> mapOf("Accept-Language" to al)
+            else -> emptyMap()
+        }
+    }
 
     /** 安全提示页上点"仍然用 http 打开" */
     fun continueInsecure(tab: TabState) {
@@ -453,7 +516,7 @@ class BrowserController(
         tab.warning = null
         tab.upgradedFrom = null
         tab.url = http
-        tab.webView?.loadUrl(http, extraHeaders())
+        tab.webView?.loadUrl(http, extraHeaders(http))
     }
 
     /** 安全提示页上点"返回" */
@@ -661,7 +724,18 @@ class BrowserController(
                     val up = upgradeFor(tab, uri.toString())
                     if (up != null) {
                         tab.upgradedFrom = uri.toString()
-                        view.loadUrl(up, extraHeaders())
+                        view.loadUrl(up, extraHeaders(up))
+                        return true
+                    }
+                }
+                // 这个网站的 Accept-Language 和 WebView 原生发的不一样（网站单独设了语言 / 防指纹例外）：GET 导航改用 loadUrl 带上正确的请求头
+                if (request.isForMainFrame && (scheme == "http" || scheme == "https") && request.method == "GET" && !request.isRedirect &&
+                    tab.langFixedUrl != uri.toString()
+                ) {
+                    val al = acceptLanguageFor(uri.toString())
+                    if (al != null) {
+                        tab.langFixedUrl = uri.toString()
+                        view.loadUrl(uri.toString(), extraHeaders(uri.toString()))
                         return true
                     }
                 }
@@ -706,7 +780,7 @@ class BrowserController(
                     if (up != null) {
                         view.stopLoading()
                         tab.upgradedFrom = url
-                        view.loadUrl(up, extraHeaders())
+                        view.loadUrl(up, extraHeaders(up))
                         return
                     }
                 }
@@ -730,6 +804,7 @@ class BrowserController(
 
             override fun onPageFinished(view: WebView, url: String?) {
                 tab.loading = false
+                tab.langFixedUrl = null
                 tab.progress = 100
                 tab.canGoBack = view.canGoBack()
                 tab.canGoForward = view.canGoForward()

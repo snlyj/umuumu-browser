@@ -119,6 +119,7 @@ class MainActivity : FragmentActivity(), AppProtection {
         lifecycleScope.launch { repo.adBlock.collect { controller.adBlockEnabled = it } }
         lifecycleScope.launch { repo.adBlockOff.collect { controller.adBlockOff = it } }
         lifecycleScope.launch { repo.fpOff.collect { controller.setFpExceptions(it) } }
+        lifecycleScope.launch { repo.tzLangSites.collect { controller.setTzLangSites(it) } }
         lifecycleScope.launch { repo.httpAllowed.collect { controller.httpAllowed = it } }
         lifecycleScope.launch { repo.sitePerms.collect { controller.sitePerms = it } }
         lifecycleScope.launch(Dispatchers.IO) { repo.migrateIfNeeded() }
@@ -132,6 +133,7 @@ class MainActivity : FragmentActivity(), AppProtection {
             val s = repo.security.first()
             applySec(s)
             controller.setFpExceptions(repo.fpOff.first())
+            controller.setTzLangSites(repo.tzLangSites.first())
             if (s.appLock && canLock()) locked = true
             var wipe = false
             val saved = withContext(Dispatchers.IO) {
