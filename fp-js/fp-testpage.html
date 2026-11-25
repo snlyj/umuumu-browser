@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>唔姆唔姆 · 指纹自测</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#fff8f3;color:#5a4250;margin:0;padding:16px}
+h1{font-size:20px;color:#e87aa0}p{font-size:13px;color:#9b8090}
+table{width:100%;border-collapse:separate;border-spacing:0 6px;font-size:13px}
+td{background:#ffe3ec;padding:8px 10px;word-break:break-all}td:first-child{border-radius:14px 0 0 14px;font-weight:600;width:38%}
+td:last-child{border-radius:0 14px 14px 0}
+</style></head><body>
+<h1>🐰 指纹自测页</h1>
+<p>同一个网站里刷新，数值应该不变；换一个网站（或重启 App）后，画布/WebGL/音频的哈希应该变化。</p>
+<table id="t"></table>
+<iframe id="f" style="display:none"></iframe>
+<script>
+function h(s){var x=0x811c9dc5;for(var i=0;i<s.length;i++){x^=s.charCodeAt(i);x=Math.imul(x,16777619)}return (x>>>0).toString(16)}
+function hb(a){var x=0x811c9dc5;for(var i=0;i<a.length;i++){x^=a[i];x=Math.imul(x,16777619)}return (x>>>0).toString(16)}
+function draw(c){c.width=220;c.height=60;var x=c.getContext('2d');x.textBaseline='top';x.font='16px Arial';x.fillStyle='#f60';x.fillRect(100,1,62,20);x.fillStyle='#069';x.fillText('唔姆 fp 🐰 Cwm fjord',2,15);x.fillStyle='rgba(102,204,0,0.7)';x.fillText('唔姆 fp 🐰 Cwm fjord',4,17);return x}
+async function run(){
+  var R={};
+  var c=document.createElement('canvas');var x=draw(c);
+  R.canvasDataURL=h(c.toDataURL());R.canvasDataURL2=h(c.toDataURL());
+  R.canvasImageData=hb(x.getImageData(0,0,220,60).data);
+  R.measureText=String(x.measureText('唔姆 Cwm fjord').width);
+  var fw=document.getElementById('f').contentWindow;var c3=fw.document.createElement('canvas');draw(c3);
+  R.iframeCanvasSame=(h(c3.toDataURL())===R.canvasDataURL);
+  var nf=document.createElement('iframe');document.body.appendChild(nf);var nfw=nf.contentWindow;
+  R.newIframeCanvasSame=(h(draw(nfw.document.createElement('canvas')).canvas.toDataURL())===R.canvasDataURL);
+  R.iframeHwConc=nfw.navigator.hardwareConcurrency;R.iframePlatform=nfw.navigator.platform;R.secure=isSecureContext;
+  try{var g=document.createElement('canvas');g.width=g.height=64;var gl=g.getContext('webgl');
+    if(gl){var e=gl.getExtension('WEBGL_debug_renderer_info');R.glVendor=e?gl.getParameter(e.UNMASKED_VENDOR_WEBGL):'-';R.glRenderer=e?gl.getParameter(e.UNMASKED_RENDERER_WEBGL):'-';
+      R.glMaxTex=gl.getParameter(gl.MAX_TEXTURE_SIZE);R.glMaxVUV=gl.getParameter(gl.MAX_VERTEX_UNIFORM_VECTORS);
+      gl.clearColor(0.2,0.5,0.8,1);gl.clear(gl.COLOR_BUFFER_BIT);var px=new Uint8Array(64*64*4);gl.readPixels(0,0,64,64,gl.RGBA,gl.UNSIGNED_BYTE,px);R.glReadPixels=hb(px);
+      R.glDataURL=h(g.toDataURL());}else R.webgl='不支持'}catch(e){R.webgl='错误 '+e}
+  try{var ac=new OfflineAudioContext(1,5000,44100);var o=ac.createOscillator();o.type='triangle';o.frequency.value=10000;var cp=ac.createDynamicsCompressor();o.connect(cp);cp.connect(ac.destination);o.start(0);
+    var buf=await ac.startRendering();var d=buf.getChannelData(0),s=0;for(var i=4500;i<5000;i++)s+=Math.abs(d[i]);R.audio=String(s)}catch(e){R.audio='错误 '+e}
+  var n=navigator;R.hardwareConcurrency=n.hardwareConcurrency;R.deviceMemory=n.deviceMemory;R.platform=n.platform;R.language=n.language;R.languages=JSON.stringify(n.languages);
+  R.plugins=n.plugins.length;R.mimeTypes=n.mimeTypes.length;R.maxTouchPoints=n.maxTouchPoints;
+  R.screen=screen.width+'x'+screen.height+' avail '+screen.availWidth+'x'+screen.availHeight+' depth '+screen.colorDepth;R.dpr=devicePixelRatio;R.inner=innerWidth+'x'+innerHeight;
+  R.timezone=Intl.DateTimeFormat().resolvedOptions().timeZone+' offset '+new Date().getTimezoneOffset();R.dateString=String(new Date(0));
+  var t0=performance.now(),m=1e9;for(var k=0;k<2000;k++){var t1=performance.now();if(t1>t0&&t1-t0<m)m=t1-t0;t0=t1}R.perfNowStep=m;
+  R.getBattery='getBattery' in n;if(n.getBattery){try{var b=await n.getBattery();R.battery=b.level+' charging '+b.charging}catch(e){R.battery='错误'}}
+  R.gamepads=JSON.stringify(n.getGamepads?Array.from(n.getGamepads()):null);R.usb='usb' in n;R.bluetooth='bluetooth' in n;R.hid='hid' in n;R.serial='serial' in n;R.keyboard='keyboard' in n;
+  try{var dv=await n.mediaDevices.enumerateDevices();R.mediaDevices=dv.map(function(d){return d.kind}).join(',')}catch(e){R.mediaDevices='-'}
+  R.connection=n.connection?(n.connection.effectiveType+' rtt '+n.connection.rtt+' down '+n.connection.downlink):'-';
+  R.toStringNative=[HTMLCanvasElement.prototype.toDataURL,CanvasRenderingContext2D.prototype.getImageData,Function.prototype.toString,Object.getOwnPropertyDescriptor(Navigator.prototype,'hardwareConcurrency').get].map(function(f){return /\[native code\]/.test(Function.prototype.toString.call(f))}).join(',');
+  R.toStringText=String(HTMLCanvasElement.prototype.toDataURL);
+  R.fnName=HTMLCanvasElement.prototype.toDataURL.name+'/'+HTMLCanvasElement.prototype.toDataURL.length+'/'+('prototype' in HTMLCanvasElement.prototype.toDataURL);
+  R.motionListener=(function(){try{addEventListener('devicemotion',function(){});return 'ok'}catch(e){return 'err'}})();
+  window.__fp=R;
+  var t=document.getElementById('t');Object.keys(R).forEach(function(k){var tr=document.createElement('tr');tr.innerHTML='<td></td><td></td>';tr.children[0].textContent=k;tr.children[1].textContent=String(R[k]);t.appendChild(tr)});
+  document.title='done';
+}
+run();
+</script></body></html>
