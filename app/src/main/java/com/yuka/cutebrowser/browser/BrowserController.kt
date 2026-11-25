@@ -50,6 +50,8 @@ import com.yuka.cutebrowser.R
 import com.yuka.cutebrowser.data.CuteRepository
 import com.yuka.cutebrowser.data.SearchEngine
 import com.yuka.cutebrowser.data.SecurityPrefs
+import com.yuka.cutebrowser.privacy.fingerprint.FingerprintShield
+import com.yuka.cutebrowser.privacy.fingerprint.FpSeed
 import com.yuka.cutebrowser.data.SitePerm
 import com.yuka.cutebrowser.data.SitePermEntry
 import com.yuka.cutebrowser.security.HttpsUpgrade
@@ -160,6 +162,8 @@ class BrowserController(
         private set
 
     val downloads = Downloads(activity.applicationContext, repo)
+    /** 防指纹（脚本注入 + 每站种子），见 privacy/fingerprint */
+    val fingerprint = FingerprintShield(activity.applicationContext)
     private val session = SessionStore(activity.applicationContext)
     private val main = Handler(Looper.getMainLooper())
 
@@ -174,7 +178,10 @@ class BrowserController(
 
     val current: TabState get() = tabs[currentIndex.coerceIn(0, tabs.lastIndex)]
 
-    init { newTab() }
+    init {
+        newTab()
+        activity.lifecycleScope.launch(Dispatchers.IO) { fingerprint.preload() }
+    }
 
     /** 安全设置变化：影响 WebView 创建参数的（UA / 注入脚本 / 自动填充）就重建 WebView；Cookie 设置直接改 */
     fun applySecurity(new: SecurityPrefs) {
@@ -187,6 +194,24 @@ class BrowserController(
         if (old.genericUa != new.genericUa || old.webrtcProtect != new.webrtcProtect || old.dntGpc != new.dntGpc || old.autofill != new.autofill) {
             rebuildWebViews()
         }
+        if (fingerprint.update(new.antiFp, new.fpStrict, fingerprint.exceptions, liveWebViews())) current.webView?.reload()
+    }
+
+    private fun liveWebViews(): List<WebView> = tabs.mapNotNull { it.webView } + listOfNotNull(spare)
+
+    /** 用户关掉防指纹的网站（启动时从 DataStore 读出来） */
+    fun setFpExceptions(sites: Set<String>) {
+        fingerprint.update(fingerprint.enabled, fingerprint.strict, sites, liveWebViews())
+    }
+
+    /** 盾牌菜单里"在这个网站防指纹"开关：按 eTLD+1 记，改完刷新当前页 */
+    fun setSiteFingerprint(host: String, enabled: Boolean) {
+        val site = FpSeed.site(host)
+        if (site.isEmpty()) return
+        val set = if (enabled) fingerprint.exceptions - site else fingerprint.exceptions + site
+        fingerprint.update(fingerprint.enabled, fingerprint.strict, set, liveWebViews())
+        activity.lifecycleScope.launch { repo.setFpOff(site, !enabled) }
+        current.webView?.reload()
     }
 
     // ---------------- 会话保存 / 恢复 ----------------
@@ -371,6 +396,7 @@ class BrowserController(
     /** 最后一个隐身标签关掉了：删掉整个隐身 profile（Cookie、缓存、网站存储一起删） */
     private fun endIncognitoSession() {
         incognitoHttpAllowed.clear()
+        fingerprint.endIncognito()
         val name = incognitoProfile ?: return
         incognitoProfile = null
         // WebView.destroy() 是异步收尾的，稍等一下再删；删不掉的话下次启动时再清
@@ -579,6 +605,7 @@ class BrowserController(
             mediaPlaybackRequiresUserGesture = true
         }
         WebHardening.lockDown(this, sec)
+        fingerprint.attach(this, incognito)
         val dark = webDark || incognito
         runCatching {
             if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
@@ -694,6 +721,7 @@ class BrowserController(
                 if (!WebFeatures.documentStartScript && (sec.dntGpc || sec.webrtcProtect)) {
                     view.evaluateJavascript(WebHardening.privacyScript(sec.dntGpc, sec.webrtcProtect), null)
                 }
+                fingerprint.fallbackScript(tab.incognito)?.let { view.evaluateJavascript(it, null) }
             }
 
             override fun onPageCommitVisible(view: WebView, url: String?) {

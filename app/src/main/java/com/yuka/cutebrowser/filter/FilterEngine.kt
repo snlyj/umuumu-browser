@@ -62,7 +62,8 @@ class FilterRequest(
 }
 
 object Domains {
-    private val SECOND_LEVEL = hashSetOf(
+    /** 常见的二级公共后缀（防指纹脚本也用这一份，见 FpSeed） */
+    val SECOND_LEVEL: Set<String> = hashSetOf(
         "co.uk", "org.uk", "ac.uk", "gov.uk", "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn", "com.hk",
         "com.tw", "co.jp", "ne.jp", "or.jp", "ac.jp", "co.kr", "or.kr", "com.au", "net.au", "org.au",
         "com.br", "com.sg", "com.my", "co.in", "co.nz", "com.mx", "com.tr", "co.za", "co.id", "com.vn",

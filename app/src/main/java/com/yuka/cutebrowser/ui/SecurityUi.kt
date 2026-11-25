@@ -233,6 +233,8 @@ fun ShieldDialog(tab: TabState, controller: BrowserController, onDismiss: () -> 
     val p = LocalCutePalette.current
     val host = UrlUtils.host(tab.url)
     val siteOn = host !in controller.adBlockOff
+    val fpOn = controller.sec.antiFp
+    val fpSiteOn = fpOn && !controller.fingerprint.isExempt(host)
     Dialog(onDismissRequest = onDismiss) {
         Column(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(30.dp)).background(p.surface).padding(22.dp),
@@ -243,11 +245,19 @@ fun ShieldDialog(tab: TabState, controller: BrowserController, onDismiss: () -> 
             Spacer(Modifier.height(10.dp))
             InfoLine(if (tab.isSecure) "🔒" else "⚠️", if (tab.isSecure) "加密连接（https）" else "未加密连接（http），别在这里输入密码哦")
             InfoLine("🧹", if (controller.adBlockEnabled && siteOn) "本页拦下了 ${tab.blockedCount} 个广告/追踪请求" else "这个网站没有开启拦截")
+            if (fpOn) InfoLine("🧬", if (fpSiteOn) "防指纹已开启（${if (controller.sec.fpStrict) "严格" else "标准"}）" else "这个网站没有开启防指纹")
             if (tab.incognito) InfoLine("🎭", "隐身标签：不记历史，关掉后 Cookie 和缓存一起清除")
             Spacer(Modifier.height(14.dp))
             if (controller.adBlockEnabled && host.isNotBlank()) {
                 ToggleRow("🐰", "在这个网站拦截广告", "网页显示不正常时可以关掉试试", siteOn) {
                     controller.setSiteAdBlock(host, !siteOn)
+                    onDismiss()
+                }
+            }
+            if (fpOn && host.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                ToggleRow("🧬", "在这个网站防指纹", "验证码、网银或地图显示不正常时可以关掉试试", fpSiteOn) {
+                    controller.setSiteFingerprint(host, !fpSiteOn)
                     onDismiss()
                 }
             }
@@ -326,6 +336,14 @@ fun SecuritySheet(controller: BrowserController, repo: CuteRepository, protectio
         Gap()
         ToggleRow("🙅", "请勿追踪 / GPC", "告诉网站：不要追踪我、不要卖我的数据", sec.dntGpc) {
             upd { it.copy(dntGpc = !it.dntGpc) }
+        }
+        Gap()
+        ToggleRow("🧬", "防指纹", "给画布、WebGL、音频加一点点每个网站都不同的噪声，统一屏幕和硬件信息，网站很难认出你", sec.antiFp) {
+            upd { it.copy(antiFp = !it.antiFp) }
+        }
+        if (sec.antiFp) {
+            Spacer(Modifier.height(8.dp))
+            FpLevelPicker(sec.fpStrict) { strict -> upd { it.copy(fpStrict = strict) } }
         }
         Gap()
         ToggleRow("✍️", "网页自动填充", "让系统的自动填充服务读取网页表单（默认关）", sec.autofill) {
@@ -457,5 +475,22 @@ private fun openPrivateDnsSettings(ctx: android.content.Context) {
     val intents = listOf(Intent("android.settings.PRIVATE_DNS_SETTINGS"), Intent(Settings.ACTION_WIRELESS_SETTINGS), Intent(Settings.ACTION_SETTINGS))
     for (i in intents) {
         if (runCatching { ctx.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess) return
+    }
+}
+
+/** 防指纹级别：标准 / 严格 */
+@Composable
+private fun FpLevelPicker(strict: Boolean, onPick: (Boolean) -> Unit) {
+    val p = LocalCutePalette.current
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(p.lavender.copy(alpha = 0.55f)).padding(14.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            PillButton(if (!strict) "标准 ✓" else "标准", if (!strict) p.accent else p.surface, if (!strict) p.onAccent else p.text, { onPick(false) }, Modifier.weight(1f))
+            PillButton(if (strict) "严格 ✓" else "严格", if (strict) p.accent else p.surface, if (strict) p.onAccent else p.text, { onPick(true) }, Modifier.weight(1f))
+        }
+        Text(
+            if (!strict) "推荐：几乎不影响网站，速度不受影响。"
+            else "另外把时区报成 UTC、屏幕尺寸固定、计时精度降到 1 毫秒。网页上的时间可能会差几个小时，有些网站可能不正常。",
+            color = p.subText, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp),
+        )
     }
 }

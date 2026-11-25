@@ -43,6 +43,8 @@ data class SecurityPrefs(
     val secureScreen: Boolean = false,      // 普通标签防截屏（隐身标签总是开）
     val appLock: Boolean = false,
     val clearOnExit: Boolean = false,
+    val antiFp: Boolean = true,            // 防指纹（v1.4）
+    val fpStrict: Boolean = false,         // 防指纹严格级别：另外把时区设成 UTC、屏幕固定等
 )
 
 /** 网站权限种类 */
@@ -80,6 +82,7 @@ class CuteRepository(context: Context) {
         val SITE_PERMS = stringPreferencesKey("site_perms")
         val HTTP_OK = stringPreferencesKey("http_allowed")
         val AD_OFF = stringPreferencesKey("adblock_off")
+        val FP_OFF = stringPreferencesKey("fp_off")
     }
 
     val security: Flow<SecurityPrefs> = ds.data.map { it[Keys.SEC] }.distinctUntilChanged().map { decodeSec(it) }
@@ -92,6 +95,9 @@ class CuteRepository(context: Context) {
 
     /** 用户关掉了拦截的网站 */
     val adBlockOff: Flow<Set<String>> = ds.data.map { it[Keys.AD_OFF] }.distinctUntilChanged().map { decodeSet(it) }
+
+    /** 用户关掉防指纹的网站（eTLD+1） */
+    val fpOff: Flow<Set<String>> = ds.data.map { it[Keys.FP_OFF] }.distinctUntilChanged().map { decodeSet(it) }
 
     suspend fun updateSecurity(f: (SecurityPrefs) -> SecurityPrefs) {
         ds.edit { p -> p[Keys.SEC] = encodeSec(f(decodeSec(p[Keys.SEC]))) }
@@ -109,6 +115,7 @@ class CuteRepository(context: Context) {
 
     suspend fun setHttpAllowed(host: String, allowed: Boolean) = editSet(Keys.HTTP_OK, host, allowed)
     suspend fun setAdBlockOff(host: String, off: Boolean) = editSet(Keys.AD_OFF, host, off)
+    suspend fun setFpOff(site: String, off: Boolean) = editSet(Keys.FP_OFF, site, off)
 
     private suspend fun editSet(key: Preferences.Key<String>, v: String, add: Boolean) {
         ds.edit { p ->
@@ -126,7 +133,7 @@ class CuteRepository(context: Context) {
     private fun encodeSec(x: SecurityPrefs): String = JSONObject()
         .put("https", x.httpsOnly).put("3pc", x.blockThirdPartyCookies).put("rtc", x.webrtcProtect).put("ua", x.genericUa)
         .put("gpc", x.dntGpc).put("autofill", x.autofill).put("secure", x.secureScreen).put("lock", x.appLock)
-        .put("clear", x.clearOnExit).toString()
+        .put("clear", x.clearOnExit).put("fp", x.antiFp).put("fps", x.fpStrict).toString()
 
     private fun decodeSec(s: String?): SecurityPrefs {
         val d = SecurityPrefs()
@@ -137,6 +144,7 @@ class CuteRepository(context: Context) {
                 o.optBoolean("https", d.httpsOnly), o.optBoolean("3pc", d.blockThirdPartyCookies), o.optBoolean("rtc", d.webrtcProtect),
                 o.optBoolean("ua", d.genericUa), o.optBoolean("gpc", d.dntGpc), o.optBoolean("autofill", d.autofill),
                 o.optBoolean("secure", d.secureScreen), o.optBoolean("lock", d.appLock), o.optBoolean("clear", d.clearOnExit),
+                o.optBoolean("fp", d.antiFp), o.optBoolean("fps", d.fpStrict),
             )
         }.getOrDefault(d)
     }
