@@ -21,7 +21,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import java.net.InetAddress
 import java.util.concurrent.Executor
@@ -197,9 +200,39 @@ object DohManager {
             (if (r.failures.get() > 0) " · 严格模式拦下 ${r.failures.get()} 次" else "")
     }
 
-    /** 设置页的"测一测"：新建一个连接，测首次（含 TLS 握手）和复用连接后的查询耗时 */
-    suspend fun test(provider: DohProvider): DohTestResult = withContext(Dispatchers.IO) {
-        val t = OkHttpDohTransport(provider)
+    const val TEST_TIMEOUT_MS = 10_000L
+
+    /**
+     * 设置页的"测一测"：新建一个连接，测首次（含 TLS 握手）和复用连接后的查询耗时。
+     * 必须在 IO 线程跑、有超时、把 Throwable（含 Error，例如 R8 把 okhttp 裁坏时的 ExceptionInInitializerError）
+     * 都收成结果，不能把协程打崩。
+     */
+    suspend fun test(
+        provider: DohProvider,
+        timeoutMs: Long = TEST_TIMEOUT_MS,
+        probe: suspend (DohProvider) -> DohTestResult = { probeProvider(it) },
+    ): DohTestResult = withContext(Dispatchers.IO) {
+        try {
+            withTimeout(timeoutMs) { probe(provider) }
+        } catch (e: TimeoutCancellationException) {
+            DohTestResult(false, -1, -1, "超时（${timeoutMs} ms）")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            failResult(t)
+        }
+    }
+
+    /** 真正发查询（可注入假 transport 做测试）。创建 transport 或解析失败都收成结果。 */
+    internal fun probeProvider(provider: DohProvider, transport: DohTransport? = null): DohTestResult {
+        val owned = transport == null
+        val t = if (transport != null) transport else {
+            try {
+                OkHttpDohTransport(provider)
+            } catch (err: Throwable) {
+                return failResult(err)
+            }
+        }
         try {
             val t0 = System.nanoTime()
             val r1 = DnsMessage.parse(t.exchange(DnsMessage.buildQuery("www.bing.com", DnsMessage.TYPE_A)))
@@ -208,11 +241,17 @@ object DohManager {
             val r2 = DnsMessage.parse(t.exchange(DnsMessage.buildQuery("www.baidu.com", DnsMessage.TYPE_A)))
             val warm = (System.nanoTime() - t1) / 1_000_000
             val ip = (r1.addresses(DnsMessage.TYPE_A) + r2.addresses(DnsMessage.TYPE_A)).firstOrNull()?.hostAddress
-            DohTestResult(ip != null, cold, warm, if (ip != null) "www.bing.com → $ip" else "没有查到地址（rcode ${r1.rcode}）")
-        } catch (e: Exception) {
-            DohTestResult(false, -1, -1, e.message ?: e.javaClass.simpleName)
+            return DohTestResult(
+                ip != null, cold, warm,
+                if (ip != null) "www.bing.com → $ip" else "没有查到地址（rcode ${r1.rcode}）",
+            )
+        } catch (err: Throwable) {
+            return failResult(err)
         } finally {
-            t.close()
+            if (owned && t is OkHttpDohTransport) runCatching { t.close() }
         }
     }
+
+    internal fun failResult(t: Throwable): DohTestResult =
+        DohTestResult(false, -1, -1, t.message ?: t.javaClass.simpleName)
 }

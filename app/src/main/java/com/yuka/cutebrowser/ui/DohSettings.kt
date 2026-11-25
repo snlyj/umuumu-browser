@@ -41,6 +41,7 @@ import com.yuka.cutebrowser.dns.DohManager
 import com.yuka.cutebrowser.dns.DohPrefs
 import com.yuka.cutebrowser.dns.DohProvider
 import com.yuka.cutebrowser.ui.theme.LocalCutePalette
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -128,23 +129,37 @@ fun DohSettingsSection() {
                 if (pr == null) { result = "先填好自定义地址哦"; return@SmallPill }
                 testing = true; result = null
                 scope.launch {
-                    val r = DohManager.test(pr)
-                    result = if (r.ok) "✅ ${pr.label}：首次连接 ${r.coldMs} ms，之后每次查询 ${r.warmMs} ms\n${r.detail}"
-                    else "😿 ${pr.label} 连不上：${r.detail}"
-                    testing = false
+                    try {
+                        result = speedTestLine(pr)
+                    } catch (t: Throwable) {
+                        if (t is CancellationException) throw t
+                        result = "😿 ${pr.label} 出错：${t.message ?: t.javaClass.simpleName}"
+                    } finally {
+                        testing = false
+                    }
                 }
             }
             SmallPill("全部测一测", p.lavender, p.text) {
                 if (testing) return@SmallPill
                 testing = true; result = "测速中…"
                 scope.launch {
-                    val lines = ArrayList<String>()
-                    for (pr in DohProvider.BUILT_IN) {
-                        val r = DohManager.test(pr)
-                        lines += if (r.ok) "${pr.label}：${r.warmMs} ms（首次 ${r.coldMs} ms）" else "${pr.label}：连不上 😿"
-                        result = lines.joinToString("\n")
+                    try {
+                        val lines = ArrayList<String>()
+                        for (pr in DohProvider.BUILT_IN) {
+                            lines += try {
+                                speedTestLine(pr, compact = true)
+                            } catch (t: Throwable) {
+                                if (t is CancellationException) throw t
+                                "${pr.label}：出错（${t.message ?: t.javaClass.simpleName}）"
+                            }
+                            result = lines.joinToString("\n")
+                        }
+                    } catch (t: Throwable) {
+                        if (t is CancellationException) throw t
+                        result = (result ?: "") + "\n😿 测速中断：${t.message ?: t.javaClass.simpleName}"
+                    } finally {
+                        testing = false
                     }
-                    testing = false
                 }
             }
         }
@@ -200,4 +215,15 @@ private fun SmallPill(text: String, bg: Color, fg: Color, onClick: () -> Unit) {
         Modifier.clip(RoundedCornerShape(50)).background(bg).bouncyClick(onClick).padding(horizontal = 16.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) { Text(text, color = fg, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+}
+
+/** 单个服务商测速，失败也返回文案（DohManager.test 已吞掉异常；这里再兜一层） */
+private suspend fun speedTestLine(pr: DohProvider, compact: Boolean = false): String {
+    val r = DohManager.test(pr)
+    return if (r.ok) {
+        if (compact) "${pr.label}：${r.warmMs} ms（首次 ${r.coldMs} ms）"
+        else "✅ ${pr.label}：首次连接 ${r.coldMs} ms，之后每次查询 ${r.warmMs} ms\n${r.detail}"
+    } else {
+        "${pr.label}：连不上 😿（${r.detail}）"
+    }
 }

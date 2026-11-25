@@ -1,5 +1,6 @@
 package com.yuka.cutebrowser.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +27,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -40,6 +42,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yuka.cutebrowser.browser.BrowserController
@@ -68,6 +72,20 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+
+/** 菜单/标签等可以下滑关掉；设置、安全、网站权限只能按返回或关闭按钮。 */
+internal fun sheetAllowsSwipeDismiss(sheet: SheetType): Boolean = when (sheet) {
+    SheetType.Settings, SheetType.Security, SheetType.SitePerms -> false
+    else -> true
+}
+
+/** 系统返回：安全回到设置，网站权限回到安全，其它关掉面板。 */
+internal fun sheetOnBack(sheet: SheetType): SheetType = when (sheet) {
+    SheetType.Security -> SheetType.Settings
+    SheetType.SitePerms -> SheetType.Security
+    else -> SheetType.None
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CuteSheets(
@@ -82,12 +100,21 @@ fun CuteSheets(
 ) {
     if (sheet == SheetType.None) return
     val p = LocalCutePalette.current
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = sheet != SheetType.Menu)
+    val swipeDismiss = sheetAllowsSwipeDismiss(sheet)
+    // confirmValueChange 必须 remember，不然每次重组都换 lambda，SheetState 会被重建
+    val confirm = remember(swipeDismiss) {
+        { value: SheetValue -> value != SheetValue.Hidden || swipeDismiss }
+    }
+    val state = rememberModalBottomSheetState(
+        skipPartiallyExpanded = sheet != SheetType.Menu,
+        confirmValueChange = confirm,
+    )
     val scope = rememberCoroutineScope()
     val close: () -> Unit = { onChange(SheetType.None) }
+    BackHandler { onChange(sheetOnBack(sheet)) }
 
     ModalBottomSheet(
-        onDismissRequest = close,
+        onDismissRequest = { onChange(sheetOnBack(sheet)) },
         sheetState = state,
         containerColor = p.surface,
         contentColor = p.text,
@@ -143,9 +170,9 @@ fun CuteSheets(
                     )
                 }
                 SheetType.Downloads -> DownloadsSheet(controller)
-                SheetType.Settings -> SettingsSheet(controller, repo) { onChange(SheetType.Security) }
-                SheetType.Security -> SecuritySheet(controller, repo, protection) { onChange(SheetType.SitePerms) }
-                SheetType.SitePerms -> SitePermsSheet(repo, controller)
+                SheetType.Settings -> SettingsSheet(controller, repo, onClose = close) { onChange(SheetType.Security) }
+                SheetType.Security -> SecuritySheet(controller, repo, protection, onClose = close) { onChange(SheetType.SitePerms) }
+                SheetType.SitePerms -> SitePermsSheet(repo, controller, onClose = close)
                 SheetType.None -> Unit
             }
         }
@@ -153,13 +180,23 @@ fun CuteSheets(
 }
 
 @Composable
-internal fun SheetHeader(title: String, emoji: String, trailing: @Composable () -> Unit = {}) {
+internal fun SheetHeader(title: String, emoji: String, onClose: (() -> Unit)? = null, trailing: @Composable () -> Unit = {}) {
     val p = LocalCutePalette.current
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(emoji, fontSize = 20.sp)
         Spacer(Modifier.width(8.dp))
         Text(title, color = p.text, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
         trailing()
+        if (onClose != null) {
+            Box(
+                Modifier.size(32.dp).clip(CircleShape).background(p.pink)
+                    .semantics { contentDescription = "关闭" }
+                    .bouncyClick(onClick = onClose),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(CuteIcons.Close, contentDescription = null, tint = p.text, modifier = Modifier.size(16.dp))
+            }
+        }
     }
 }
 
@@ -356,7 +393,7 @@ private fun EntryListSheet(
 }
 
 @Composable
-private fun SettingsSheet(controller: BrowserController, repo: CuteRepository, onSecurity: () -> Unit) {
+private fun SettingsSheet(controller: BrowserController, repo: CuteRepository, onClose: () -> Unit, onSecurity: () -> Unit) {
     val p = LocalCutePalette.current
     val scope = rememberCoroutineScope()
     val theme by repo.theme.collectAsState(initial = CuteThemeId.STRAWBERRY)
@@ -367,7 +404,7 @@ private fun SettingsSheet(controller: BrowserController, repo: CuteRepository, o
     val versionName = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull().orEmpty() }
 
     Column(Modifier.verticalScroll(rememberScrollState())) {
-        SheetHeader("设置", "🌼")
+        SheetHeader("设置", "🌼", onClose = onClose)
 
         Label("主题皮肤")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {

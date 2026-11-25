@@ -33,9 +33,19 @@ class TzLangTest {
         TzLang.PRESETS.forEach { assertTrue(TzLang.isValidZone(it.tz)); assertNotNull(TzLang.normalizeLang(it.lang)) }
         assertEquals("UTC+8", TzLang.offsetLabel("Asia/Shanghai"))
         assertEquals("UTC+5:30", TzLang.offsetLabel("Asia/Kolkata"))
-        // 夏令时：纽约 1 月 UTC-5、7 月 UTC-4
+        // 夏令时：走 IANA / java.time，不写死偏移。纽约 1 月 UTC-5、7 月 UTC-4；西雅图同洛杉矶
         assertEquals("UTC-5", TzLang.offsetLabel("America/New_York", 1767225600000L))
         assertEquals("UTC-4", TzLang.offsetLabel("America/New_York", 1782864000000L))
+        assertEquals("UTC-8", TzLang.offsetLabel("America/Los_Angeles", 1767225600000L))
+        assertEquals("UTC-7", TzLang.offsetLabel("America/Los_Angeles", 1782864000000L))
+        val sea = TzLang.COMMON_ZONES.single { it.id == "America/Los_Angeles" }
+        assertTrue(sea.label.contains("西雅图"))
+        assertTrue(sea.label.contains("Seattle"))
+        assertTrue(TzLang.COMMON_ZONES.any { it.id == "America/Denver" && it.label.contains("丹佛") })
+        assertTrue(TzLang.COMMON_ZONES.any { it.id == "America/Chicago" })
+        assertTrue(TzLang.COMMON_ZONES.any { it.id == "America/New_York" })
+        assertTrue(TzLang.LANGUAGES.any { it.id == "en-US" })
+        assertEquals("America/Los_Angeles", TzLang.PRESETS.first { it.tz == "America/Los_Angeles" }.tz)
         // 常用的排在最前，且不重复
         val all = TzLang.searchZones("")
         assertEquals("Asia/Shanghai", all.first().id)
@@ -47,6 +57,10 @@ class TzLangTest {
         assertTrue(TzLang.searchZones("东京").any { it.id == "Asia/Tokyo" })
         assertTrue(TzLang.searchZones("tokyo").any { it.id == "Asia/Tokyo" })
         assertTrue(TzLang.searchZones("new york").any { it.id == "America/New_York" })
+        assertTrue(TzLang.searchZones("seattle").any { it.id == "America/Los_Angeles" })
+        assertTrue(TzLang.searchZones("西雅图").any { it.id == "America/Los_Angeles" })
+        assertTrue(TzLang.searchZones("洛杉矶").any { it.id == "America/Los_Angeles" })
+        assertTrue(TzLang.searchZones("丹佛").any { it.id == "America/Denver" })
         assertTrue(TzLang.searchZones("utc+9").any { it.id == "Asia/Tokyo" })
         assertTrue(TzLang.searchZones("zzzz").isEmpty())
     }

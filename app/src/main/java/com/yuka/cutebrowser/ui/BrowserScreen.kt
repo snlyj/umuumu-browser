@@ -37,6 +37,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -76,7 +77,7 @@ fun BrowserScreen(controller: BrowserController, repo: CuteRepository, protectio
     val bookmarks by repo.bookmarks.collectAsState(initial = emptyList())
     // 必须同时以 tab 为 key：derivedStateOf 的 lambda 会捕获当时的 tab，切换标签后不换 key 会一直盯着旧标签，爱心状态就错了
     val isBookmarked by remember(bookmarks, tab) { derivedStateOf { !tab.isHome && bookmarks.any { it.url == tab.url } } }
-    var sheet by remember { mutableStateOf(SheetType.None) }
+    var sheet by rememberSaveable { mutableStateOf(SheetType.None) }
     var heartBurst by remember { mutableIntStateOf(0) }
     var shield by remember { mutableStateOf(false) }
 

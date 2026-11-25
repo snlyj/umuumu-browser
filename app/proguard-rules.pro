@@ -15,3 +15,13 @@
 -dontwarn org.conscrypt.**
 -dontwarn org.openjsse.**
 -dontwarn okhttp3.internal.platform.**
+
+# 测速/DoH 才会第一次碰到 OkHttp。R8 full mode 若裁掉 okio 扩展（toByteString / toHttpUrl）
+# 或 PublicSuffixDatabase，release 包一点「测一测」就会 ExceptionInInitializerError / NoSuchMethodError。
+-keep class okhttp3.** { *; }
+-keep interface okhttp3.** { *; }
+-keep class okio.** { *; }
+-keep interface okio.** { *; }
+-keepnames class okhttp3.internal.publicsuffix.PublicSuffixDatabase
+-dontwarn okhttp3.**
+-dontwarn okio.**

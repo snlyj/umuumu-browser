@@ -312,7 +312,7 @@ fun IncognitoHome(isolated: Boolean, modifier: Modifier = Modifier) {
 // ---------------- 设置：安全与隐私 ----------------
 
 @Composable
-fun SecuritySheet(controller: BrowserController, repo: CuteRepository, protection: AppProtection, onSitePerms: () -> Unit) {
+fun SecuritySheet(controller: BrowserController, repo: CuteRepository, protection: AppProtection, onClose: () -> Unit, onSitePerms: () -> Unit) {
     val p = LocalCutePalette.current
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -320,7 +320,7 @@ fun SecuritySheet(controller: BrowserController, repo: CuteRepository, protectio
     val httpAllowed by repo.httpAllowed.collectAsState(initial = emptySet())
     val upd: ((SecurityPrefs) -> SecurityPrefs) -> Unit = { f -> scope.launch { repo.updateSecurity(f) } }
     Column(Modifier.verticalScroll(rememberScrollState())) {
-        SheetHeader("安全与隐私", "🛡️")
+        SheetHeader("安全与隐私", "🛡️", onClose = onClose)
 
         Label("上网保护")
         ToggleRow("🔒", "只用 HTTPS", "自动把 http 换成加密的 https；打不开时会先问你" +
@@ -426,12 +426,12 @@ fun SecuritySheet(controller: BrowserController, repo: CuteRepository, protectio
 private fun Gap() = Spacer(Modifier.height(10.dp))
 
 @Composable
-fun SitePermsSheet(repo: CuteRepository, controller: BrowserController) {
+fun SitePermsSheet(repo: CuteRepository, controller: BrowserController, onClose: () -> Unit = {}) {
     val p = LocalCutePalette.current
     val scope = rememberCoroutineScope()
     val perms by repo.sitePerms.collectAsState(initial = controller.sitePerms)
     Column(Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
-        SheetHeader("网站权限", "📍") {
+        SheetHeader("网站权限", "📍", onClose = onClose) {
             if (perms.isNotEmpty()) {
                 Box(
                     Modifier.clip(RoundedCornerShape(50)).background(p.pink)

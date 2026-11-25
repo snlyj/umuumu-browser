@@ -46,7 +46,8 @@ object TzLang {
     val COMMON_ZONES: List<Item> = listOf(
         Item("Asia/Shanghai", "上海（中国）"), Item("Asia/Hong_Kong", "香港"), Item("Asia/Taipei", "台北"),
         Item("Asia/Tokyo", "东京（日本）"), Item("Asia/Seoul", "首尔（韩国）"), Item("Asia/Singapore", "新加坡"),
-        Item("America/Los_Angeles", "洛杉矶（美国西部）"), Item("America/New_York", "纽约（美国东部）"), Item("America/Chicago", "芝加哥（美国中部）"),
+        Item("America/Los_Angeles", "西雅图 / Seattle / 洛杉矶（美国西部）"),
+        Item("America/Denver", "丹佛（美国山地）"), Item("America/Chicago", "芝加哥（美国中部）"), Item("America/New_York", "纽约（美国东部）"),
         Item("Europe/London", "伦敦（英国）"), Item("Europe/Paris", "巴黎（法国）"), Item("Europe/Berlin", "柏林（德国）"),
         Item("Europe/Moscow", "莫斯科（俄罗斯）"), Item("Asia/Kolkata", "印度"), Item("Asia/Dubai", "迪拜"),
         Item("Australia/Sydney", "悉尼（澳大利亚）"), Item("Pacific/Auckland", "奥克兰（新西兰）"), Item("America/Sao_Paulo", "圣保罗（巴西）"),
@@ -69,7 +70,7 @@ object TzLang {
     /** 一键搭配 */
     class Preset(val emoji: String, val label: String, val tz: String, val lang: String)
     val PRESETS: List<Preset> = listOf(
-        Preset("🇺🇸", "美国西部：洛杉矶 + English", "America/Los_Angeles", "en-US"),
+        Preset("🇺🇸", "美国西部：西雅图 + English", "America/Los_Angeles", "en-US"),
         Preset("🇯🇵", "日本：东京 + 日本語", "Asia/Tokyo", "ja-JP"),
         Preset("🇬🇧", "英国：伦敦 + English", "Europe/London", "en-GB"),
         Preset("🇰🇷", "韩国：首尔 + 한국어", "Asia/Seoul", "ko-KR"),
@@ -89,11 +90,14 @@ object TzLang {
 
     /** 时区的当前 UTC 偏移，给列表显示用，如 "UTC+8" / "UTC-4" / "UTC+5:30" */
     fun offsetLabel(id: String, nowMs: Long = System.currentTimeMillis()): String {
-        val tz = TimeZone.getTimeZone(id)
-        val min = tz.getOffset(nowMs) / 60000
-        val sign = if (min < 0) "-" else "+"
-        val h = abs(min) / 60
-        val m = abs(min) % 60
+        // 走 IANA tz 数据库（含夏令时），不用写死的偏移
+        val instant = java.time.Instant.ofEpochMilli(nowMs)
+        val zone = runCatching { java.time.ZoneId.of(id) }.getOrNull() ?: return "UTC"
+        val sec = zone.rules.getOffset(instant).totalSeconds
+        val sign = if (sec < 0) "-" else "+"
+        val absSec = abs(sec)
+        val h = absSec / 3600
+        val m = (absSec % 3600) / 60
         return "UTC$sign$h" + if (m != 0) ":%02d".format(m) else ""
     }
 
@@ -115,10 +119,15 @@ object TzLang {
 
     /** 搜索：id、中文名、偏移都能搜（忽略大小写、下划线当空格） */
     fun searchZones(query: String): List<Item> {
-        val q = query.trim().lowercase().replace(' ', '_')
+        val raw = query.trim()
+        val q = raw.lowercase().replace(' ', '_')
         val all = COMMON_ZONES + allZones.map { Item(it, "") }
         if (q.isEmpty()) return all
-        return all.filter { it.id.lowercase().contains(q) || it.label.contains(query.trim()) || offsetLabel(it.id).lowercase().contains(q) }
+        return all.filter {
+            it.id.lowercase().contains(q) ||
+                it.label.lowercase().replace(' ', '_').contains(q) ||
+                offsetLabel(it.id).lowercase().contains(q)
+        }
     }
 
     private val tagRegex = Regex("^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$")
