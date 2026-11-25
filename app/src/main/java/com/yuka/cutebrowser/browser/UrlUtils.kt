@@ -19,6 +19,22 @@ object UrlUtils {
         return engine.searchUrl(text)
     }
 
+    /**
+     * 网站来源（scheme://host[:port]），去掉路径和末尾斜杠。
+     * 默认端口（http 80 / https 443）不写出来，这样 PermissionRequest 和地理位置回调两种写法能对上。
+     * 对不上就记不成同一条网站权限。
+     */
+    fun originOf(url: String?): String? {
+        val raw = url?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val u = runCatching { Uri.parse(raw) }.getOrNull() ?: return null
+        val scheme = u.scheme?.lowercase() ?: return null
+        var host = u.host?.lowercase()?.takeIf { it.isNotEmpty() } ?: return null
+        if (':' in host && !host.startsWith("[")) host = "[$host]"
+        val port = u.port
+        val def = when (scheme) { "https" -> 443; "http" -> 80; else -> -1 }
+        return if (port != -1 && port != def) "$scheme://$host:$port" else "$scheme://$host"
+    }
+
     /** 只放行带主机名的 http(s) 网址（外部 App 传来的链接、intent 的 fallback 地址都用它过滤，挡掉 javascript: / file: / content: 等） */
     fun isWebUrl(url: String?): Boolean {
         val u = url?.trim() ?: return false

@@ -49,4 +49,24 @@ class BrowserCoreTest {
         val r = FilterRequest("https://a.com/x", "a.com", "b.com", 0)
         assertEquals(r.thirdParty, r.thirdParty)
     }
+
+    @Test
+    fun originOfNormalizesPermissionAndGeo() {
+        // PermissionRequest.origin.toString() 常带末尾 /；地理位置回调是 scheme://host[:port]
+        assertEquals("https://example.com", UrlUtils.originOf("https://example.com/"))
+        assertEquals("https://example.com", UrlUtils.originOf("https://Example.COM/path?q=1"))
+        assertEquals("https://example.com", UrlUtils.originOf("https://example.com:443"))
+        assertEquals("https://example.com", UrlUtils.originOf("https://example.com:443/"))
+        assertEquals("http://example.com", UrlUtils.originOf("http://example.com:80/index.html"))
+        assertEquals("https://example.com:8443", UrlUtils.originOf("https://example.com:8443/"))
+        assertEquals("http://example.com:8080", UrlUtils.originOf(" http://example.com:8080 "))
+        // 两种写法归一之后必须相等，不然记住的权限对不上
+        val fromPermission = UrlUtils.originOf("https://news.example.com/")
+        val fromGeo = UrlUtils.originOf("https://news.example.com")
+        assertEquals(fromPermission, fromGeo)
+        assertEquals("https://[2001:db8::1]", UrlUtils.originOf("https://[2001:db8::1]:443/"))
+        assertEquals(null, UrlUtils.originOf(null))
+        assertEquals(null, UrlUtils.originOf(""))
+        assertEquals(null, UrlUtils.originOf("https://"))
+    }
 }

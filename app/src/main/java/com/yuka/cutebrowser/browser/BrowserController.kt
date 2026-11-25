@@ -916,12 +916,13 @@ class BrowserController(
             }
 
             override fun onPermissionRequestCanceled(request: PermissionRequest) {
-                if (permissionPrompt?.origin == request.origin.toString()) permissionPrompt = null
+                val o = UrlUtils.originOf(request.origin.toString())
+                if (o != null && permissionPrompt?.origin == o) permissionPrompt = null
             }
 
             override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
                 askSitePermission(tab, origin, listOf(SitePerm.LOCATION)) { granted ->
-                    callback.invoke(origin, SitePerm.LOCATION in granted, false) // 不让 WebView 自己记，我们自己管
+                    callback.invoke(origin, SitePerm.LOCATION in granted, false) // 不让 WebView 自己记，我们自己管；回调仍用系统给的原始 origin
                 }
             }
 
@@ -969,8 +970,10 @@ class BrowserController(
      * 统一的权限流程：记住过的直接用；没记住的弹可爱对话框问（默认拒绝）；
      * 同意后如果还缺 Android 系统权限，再向系统申请。
      */
-    private fun askSitePermission(tab: TabState, origin: String, perms: List<SitePerm>, done: (Set<SitePerm>) -> Unit) {
-        val remembered = if (tab.incognito) emptyList() else sitePerms.filter { it.origin == origin }
+    private fun askSitePermission(tab: TabState, rawOrigin: String, perms: List<SitePerm>, done: (Set<SitePerm>) -> Unit) {
+        // PermissionRequest 的 Uri 可能带末尾 /，地理位置回调一般不带：统一成 scheme://host[:port] 再比较、再记住
+        val origin = UrlUtils.originOf(rawOrigin) ?: rawOrigin.trim().trimEnd('/')
+        val remembered = if (tab.incognito) emptyList() else sitePerms.filter { UrlUtils.originOf(it.origin) == origin }
         val granted = HashSet<SitePerm>()
         val ask = ArrayList<SitePerm>()
         perms.forEach { p ->
@@ -988,7 +991,7 @@ class BrowserController(
             if (allow) granted += ask
             if (remember && !tab.incognito) {
                 ask.forEach { p ->
-                    sitePerms = listOf(SitePermEntry(origin, p, allow)) + sitePerms.filterNot { it.origin == origin && it.perm == p }
+                    sitePerms = listOf(SitePermEntry(origin, p, allow)) + sitePerms.filterNot { UrlUtils.originOf(it.origin) == origin && it.perm == p }
                     activity.lifecycleScope.launch { repo.setSitePerm(origin, p, allow) }
                 }
             }
@@ -1102,12 +1105,7 @@ class BrowserController(
         view.evaluateJavascript(BlobBridge.script(token, p.url, Downloads.MAX_BLOB_BYTES), null)
     }
 
-    private fun originOf(url: String?): String? {
-        val u = url?.let { Uri.parse(it) } ?: return null
-        val scheme = u.scheme?.lowercase() ?: return null
-        val host = u.host?.lowercase() ?: return null
-        return if (u.port != -1) "$scheme://$host:${u.port}" else "$scheme://$host"
-    }
+    private fun originOf(url: String?): String? = UrlUtils.originOf(url)
 
     private fun onBlobMessage(json: String, origin: String?) {
         val o = runCatching { org.json.JSONObject(json) }.getOrNull() ?: return
