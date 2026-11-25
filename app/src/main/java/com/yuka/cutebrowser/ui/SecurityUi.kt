@@ -356,6 +356,8 @@ fun SecuritySheet(controller: BrowserController, repo: CuteRepository, protectio
             Spacer(Modifier.height(10.dp))
             PillButton("去系统设置 ⚙️", p.accent, p.onAccent, { openPrivateDnsSettings(ctx) })
         }
+        Gap()
+        DohSettingsSection()
 
         Spacer(Modifier.height(18.dp))
         Label("App 保护")

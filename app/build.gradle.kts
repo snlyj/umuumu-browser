@@ -88,6 +88,8 @@ dependencies {
     implementation("androidx.fragment:fragment:1.8.5") // biometric 自带的 fragment 太旧，和 registerForActivityResult 不兼容
     // 让 baseline-prof.txt 在安装后被系统用来预编译（侧载 APK 也生效）
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+    // App 内加密 DNS（DoH）：HTTP/2 连接复用；只有开启加密 DNS 时才会加载
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     // 截图测试（Robolectric + Roborazzi），只用于生成预览图
     testImplementation("junit:junit:4.13.2")

@@ -34,6 +34,7 @@ import com.yuka.cutebrowser.browser.AdBlocker
 import com.yuka.cutebrowser.browser.BrowserController
 import com.yuka.cutebrowser.browser.SessionStore
 import com.yuka.cutebrowser.data.CuteRepository
+import com.yuka.cutebrowser.dns.DohManager
 import com.yuka.cutebrowser.data.SecurityPrefs
 import com.yuka.cutebrowser.ui.AppProtection
 import com.yuka.cutebrowser.ui.BrowserScreen
@@ -120,6 +121,9 @@ class MainActivity : FragmentActivity(), AppProtection {
         lifecycleScope.launch { repo.httpAllowed.collect { controller.httpAllowed = it } }
         lifecycleScope.launch { repo.sitePerms.collect { controller.sitePerms = it } }
         lifecycleScope.launch(Dispatchers.IO) { repo.migrateIfNeeded() }
+        // App 内加密 DNS（默认关；关着时只读一次设置）
+        DohManager.notice = { msg -> controller.toast(msg) }
+        lifecycleScope.launch { DohManager.run(applicationContext) }
 
         val startIntent = intent
         lifecycleScope.launch {
@@ -142,6 +146,7 @@ class MainActivity : FragmentActivity(), AppProtection {
                 CookieManager.getInstance().removeAllCookies { clearMarker.delete() }
                 WebStorage.getInstance().deleteAllData()
             }
+            DohManager.awaitInitial() // 开着加密 DNS 时，等代理生效后再加载第一个网页
             controller.restore(saved)
             handleIntent(startIntent, initial = saved == null)
             sessionReady = true

@@ -57,7 +57,7 @@ import com.yuka.cutebrowser.security.WebFeatures
 import com.yuka.cutebrowser.security.WebHardening
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import java.net.InetAddress
+import com.yuka.cutebrowser.dns.DohManager
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -249,7 +249,7 @@ class BrowserController(
             WebHardening.leftoverIncognitoProfiles().forEach { WebHardening.deleteProfile(it) }
         }
         activity.lifecycleScope.launch(Dispatchers.IO) {
-            PREWARM_HOSTS.forEach { runCatching { InetAddress.getAllByName(it) } }
+            DohManager.prewarm(PREWARM_HOSTS) // 开着加密 DNS 就走 DoH 预热，不然用系统 DNS
         }
     }
 
