@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -100,7 +101,10 @@ fun DohSettingsSection() {
                         value = text, onValueChange = { text = it.trim() }, singleLine = true,
                         textStyle = TextStyle(color = p.text, fontSize = 13.sp),
                         cursorBrush = SolidColor(p.accent),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false,
+                            keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done,
+                        ),
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -47,6 +48,7 @@ import com.yuka.cutebrowser.browser.AdBlocker
 import com.yuka.cutebrowser.browser.DlStatus
 import com.yuka.cutebrowser.browser.DownloadItem
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -96,6 +98,7 @@ fun CuteSheets(
             Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
+                .imePadding() // 面板里有输入框（自定义 DoH 地址、搜时区…）：键盘弹出时内容跟着往上顶，不被挡住
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 16.dp),
         ) {
@@ -521,7 +524,7 @@ private fun DownloadsSheet(controller: BrowserController) {
     val p = LocalCutePalette.current
     val scope = rememberCoroutineScope()
     var items by remember { mutableStateOf<List<DownloadItem>?>(null) }
-    var refresh by remember { mutableStateOf(0) }
+    var refresh by remember { mutableIntStateOf(0) }
     LaunchedEffect(refresh) {
         while (isActive) {
             val list = controller.downloads.list()

@@ -131,7 +131,7 @@ private fun SearchBox(value: String, hint: String, keyboard: KeyboardType = Keyb
         BasicTextField(
             value = value, onValueChange = onChange, singleLine = true,
             textStyle = TextStyle(color = p.text, fontSize = 14.sp), cursorBrush = SolidColor(p.accent),
-            keyboardOptions = KeyboardOptions(keyboardType = keyboard, imeAction = ImeAction.Search),
+            keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = keyboard, imeAction = ImeAction.Search),
             modifier = Modifier.fillMaxWidth(),
         )
     }
