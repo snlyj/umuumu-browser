@@ -134,31 +134,34 @@ class MainActivity : FragmentActivity(), AppProtection {
             savedInstanceState == null && (it.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0
         }
         lifecycleScope.launch {
-            // 安全设置要在第一个 WebView 创建之前就位
-            val s = repo.security.first()
-            applySec(s)
-            controller.setFpExceptions(repo.fpOff.first())
-            controller.setTzLangSites(repo.tzLangSites.first())
-            if (s.appLock && canLock()) locked = true
-            var wipe = false
-            val saved = withContext(Dispatchers.IO) {
-                if (s.clearOnExit && clearMarker.exists()) {
-                    // 上次没正常退出（比如从最近任务里划掉）：现在补清
-                    SessionStore(applicationContext).clear()
-                    repo.clearHistory()
-                    File(cacheDir, "WebView").deleteRecursively() // WebView 还没加载，删缓存目录是安全的
-                    wipe = true
-                    null
-                } else controller.loadSession()
+            // 安全设置要在第一个 WebView 创建之前就位。读失败也不能让启动画面一直卡住。
+            try {
+                val s = runCatching { repo.security.first() }.getOrDefault(SecurityPrefs())
+                applySec(s)
+                runCatching { controller.setFpExceptions(repo.fpOff.first()) }
+                runCatching { controller.setTzLangSites(repo.tzLangSites.first()) }
+                if (s.appLock && canLock()) locked = true
+                var wipe = false
+                val saved = withContext(Dispatchers.IO) {
+                    if (s.clearOnExit && clearMarker.exists()) {
+                        // 上次没正常退出（比如从最近任务里划掉）：现在补清
+                        SessionStore(applicationContext).clear()
+                        repo.clearHistory()
+                        File(cacheDir, "WebView").deleteRecursively() // WebView 还没加载，删缓存目录是安全的
+                        wipe = true
+                        null
+                    } else controller.loadSession()
+                }
+                if (wipe) {
+                    CookieManager.getInstance().removeAllCookies { clearMarker.delete() }
+                    WebStorage.getInstance().deleteAllData()
+                }
+                DohManager.awaitInitial() // 开着加密 DNS 时，等代理生效后再加载第一个网页
+                controller.restore(saved)
+                handleIntent(startIntent, initial = saved == null)
+            } finally {
+                sessionReady = true
             }
-            if (wipe) {
-                CookieManager.getInstance().removeAllCookies { clearMarker.delete() }
-                WebStorage.getInstance().deleteAllData()
-            }
-            DohManager.awaitInitial() // 开着加密 DNS 时，等代理生效后再加载第一个网页
-            controller.restore(saved)
-            handleIntent(startIntent, initial = saved == null)
-            sessionReady = true
             if (locked) unlock() // 冷启动：onStart 时界面还没好，这里再弹验证
             repo.security.collect { applySec(it) }
         }
