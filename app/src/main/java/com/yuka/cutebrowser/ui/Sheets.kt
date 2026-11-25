@@ -306,7 +306,8 @@ private fun EntryListSheet(
         contentPadding = PaddingValues(vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(items, key = { "${it.url}#${it.time}" }) { e ->
+        // 序号也放进 key：万一有两条 url 和时间都一样的记录（旧数据/手改），LazyColumn 遇到重复 key 会直接崩溃
+        itemsIndexed(items, key = { i, it -> "${it.url}#${it.time}#$i" }) { _, e ->
             Row(
                 Modifier
                     .fillMaxWidth()
