@@ -83,6 +83,7 @@ class MainActivity : FragmentActivity(), AppProtection {
     private var authInProgress = false
     private var stoppedAt = 0L
 
+    private val dohNotice: (String) -> Unit = { msg -> controller.toast(msg) }
     private val clearMarker by lazy { File(filesDir, "clear_on_exit.pending") }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -125,7 +126,7 @@ class MainActivity : FragmentActivity(), AppProtection {
         lifecycleScope.launch { repo.sitePerms.collect { controller.sitePerms = it } }
         lifecycleScope.launch(Dispatchers.IO) { repo.migrateIfNeeded() }
         // App 内加密 DNS（默认关；关着时只读一次设置）
-        DohManager.notice = { msg -> controller.toast(msg) }
+        DohManager.notice = dohNotice
         lifecycleScope.launch { DohManager.run(applicationContext) }
 
         val startIntent = intent
@@ -164,7 +165,7 @@ class MainActivity : FragmentActivity(), AppProtection {
             if (theme != null && sessionReady) {
                 val incognito = controller.current.incognito
                 // 防截屏/录屏：隐身标签总是开；普通标签看设置；上锁时也开（最近任务里看不到内容）
-                val secure = incognito || sec.secureScreen || locked
+                val secure = wantSecure()
                 SideEffect {
                     if (secure) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -240,6 +241,9 @@ class MainActivity : FragmentActivity(), AppProtection {
         }
     }
 
+    /** 防截屏/录屏：隐身标签总是开；普通标签看设置；上锁时也开（最近任务里看不到内容） */
+    private fun wantSecure(): Boolean = controller.current.incognito || sec.secureScreen || locked
+
     override fun onStart() {
         super.onStart()
         // 在后台超过 15 秒回来要重新解锁（验证本身弹出的系统界面不算）
@@ -247,11 +251,16 @@ class MainActivity : FragmentActivity(), AppProtection {
             locked = true
         }
         if (locked && sessionReady) unlock()
+        // onStop 里为了"最近任务"缩略图临时加的 FLAG_SECURE：回到前台后按真实需要恢复
+        if (!wantSecure()) window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
     }
 
     override fun onStop() {
         super.onStop()
         stoppedAt = SystemClock.elapsedRealtime()
+        // Android 13 以下没有 setRecentsScreenshotEnabled：应用锁开着时，离开前先把窗口标成安全，最近任务里才不会露出网页内容
+        // （以前只有"已经上锁"之后才加 FLAG_SECURE，而上锁要等 15 秒后回来才发生，缩略图早就生成了）
+        if (sec.appLock) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         if (sec.clearOnExit) runCatching { clearMarker.createNewFile() }
     }
 
@@ -295,6 +304,8 @@ class MainActivity : FragmentActivity(), AppProtection {
     }
 
     override fun onDestroy() {
+        // 这几个是全局对象里的回调，捕获了 controller / Activity：不清掉的话 Activity 销毁后整棵界面树和 WebView 引用都漏在内存里
+        if (DohManager.notice === dohNotice) DohManager.notice = null // 只清自己的：新的 Activity 可能已经抢先装好了它的
         if (isFinishing && sec.clearOnExit) controller.clearAllDataOnExit { clearMarker.delete() }
         controller.destroyAll()
         super.onDestroy()

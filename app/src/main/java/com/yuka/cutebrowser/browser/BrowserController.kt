@@ -176,6 +176,9 @@ class BrowserController(
     private val session = SessionStore(activity.applicationContext)
     private val main = Handler(Looper.getMainLooper())
 
+    /** 明文 http 经本地 DoH 代理时改 Accept-Language 用的钩子（全局对象持有它，销毁时要摘掉，见 [destroyAll]） */
+    private val acceptLangHook: (String) -> String? = { host -> acceptLanguageFor("http://$host/") }
+
     private var nextId = 1L
     private var pendingDownload: PendingDownload? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
@@ -191,7 +194,7 @@ class BrowserController(
 
     init {
         ProcessLocale.apply(LangPolicy.processLang(spoofConfig(), sec.antiFp)) // 必须在第一个 WebView 创建之前
-        DohManager.acceptLanguageFor = { host -> acceptLanguageFor("http://$host/") }
+        DohManager.acceptLanguageFor = acceptLangHook
         newTab()
         activity.lifecycleScope.launch(Dispatchers.IO) { fingerprint.preload() }
     }
@@ -204,6 +207,8 @@ class BrowserController(
         if (old == new && !localeChanged) return
         if (old.blockThirdPartyCookies != new.blockThirdPartyCookies) {
             tabs.forEach { t -> t.webView?.let { cookieManagerFor(t).setAcceptThirdPartyCookies(it, !new.blockThirdPartyCookies) } }
+            // 预热的备用 WebView（普通 profile）也要改：它以后会被拿去当新标签，不能还带着旧的第三方 Cookie 设置
+            spare?.let { CookieManager.getInstance().setAcceptThirdPartyCookies(it, !new.blockThirdPartyCookies) }
         }
         if (old.genericUa != new.genericUa || old.webrtcProtect != new.webrtcProtect || old.dntGpc != new.dntGpc || old.autofill != new.autofill) {
             rebuildWebViews()
@@ -600,6 +605,7 @@ class BrowserController(
     }
 
     fun destroyAll() {
+        if (DohManager.acceptLanguageFor === acceptLangHook) DohManager.acceptLanguageFor = null // 不然全局对象一直拿着这个 Activity
         tabs.forEach { it.webView?.destroy(); it.webView = null }
         spare?.destroy(); spare = null
         incognitoProfile?.let { name -> incognitoProfile = null; main.post { WebHardening.deleteProfile(name) } }
@@ -608,7 +614,7 @@ class BrowserController(
     /** "退出时清除数据"：Cookie、网站存储、缓存、历史、打开的标签（收藏保留） */
     @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
     fun clearAllDataOnExit(done: () -> Unit) {
-        tabs.firstNotNullOfOrNull { it.webView }?.clearCache(true)
+        (tabs.firstNotNullOfOrNull { it.webView } ?: spare)?.clearCache(true) // 没有标签的 WebView 时用备用的清（缓存只能通过某个 WebView 实例清）
         WebStorage.getInstance().deleteAllData()
         val ctx = activity.applicationContext
         val r = repo
@@ -932,7 +938,8 @@ class BrowserController(
         if (map.isEmpty()) { request.deny(); return }
         askSitePermission(tab, request.origin.toString(), map.keys.toList()) { granted ->
             val res = granted.mapNotNull { map[it] }.toTypedArray()
-            if (res.isEmpty()) request.deny() else request.grant(res)
+            // 用户点"允许"之前网页可能已经跳走 / 撤回了请求：这时 grant/deny 会抛异常，别让 App 崩
+            runCatching { if (res.isEmpty()) request.deny() else request.grant(res) }
         }
     }
 
