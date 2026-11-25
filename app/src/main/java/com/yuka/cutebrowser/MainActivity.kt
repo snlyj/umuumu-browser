@@ -84,7 +84,6 @@ class MainActivity : FragmentActivity(), AppProtection {
     private var authInProgress = false
     private var stoppedAt = 0L
 
-    private val dohNotice: (String) -> Unit = { msg -> controller.toast(msg) }
     private val clearMarker by lazy { File(filesDir, "clear_on_exit.pending") }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -308,8 +307,6 @@ class MainActivity : FragmentActivity(), AppProtection {
     }
 
     override fun onDestroy() {
-        // 这几个是全局对象里的回调，捕获了 controller / Activity：不清掉的话 Activity 销毁后整棵界面树和 WebView 引用都漏在内存里
-        if (DohManager.notice === dohNotice) DohManager.notice = null // 只清自己的：新的 Activity 可能已经抢先装好了它的
         if (isFinishing && sec.clearOnExit) controller.clearAllDataOnExit { clearMarker.delete() }
         controller.destroyAll()
         // 这两个是进程级单例，别让它们的回调一直拿着已经销毁的 Activity（经由 controller）
