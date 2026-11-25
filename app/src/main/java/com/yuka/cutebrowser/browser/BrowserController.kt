@@ -179,7 +179,9 @@ class BrowserController(
     private var nextId = 1L
     private var pendingDownload: PendingDownload? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
-    private val pendingBlobs = HashMap<String, Pair<PendingDownload, String?>>()
+    /** 等网页把 blob 内容交回来的下载：token -> (下载, 发起时的页面来源, 发起时间) */
+    private class PendingBlob(val p: PendingDownload, val origin: String?, val at: Long)
+    private val pendingBlobs = HashMap<String, PendingBlob>()
     private val blobBridge = BlobBridge { json, origin -> activity.runOnUiThread { onBlobMessage(json, origin) } }
 
     /** 空闲时预热好的一个 WebView，第一次打开网页时直接拿来用 */
@@ -788,6 +790,7 @@ class BrowserController(
                 }
                 tab.loading = true
                 tab.cosmeticFor = null
+                if (pendingBlobs.isNotEmpty()) purgeBlobs(view) // 页面跳走了：这页发起的 blob 下载作废
                 if (url != null) {
                     tab.url = url
                     Uri.parse(url).host?.let { tab.pageHost = it.lowercase() }
@@ -1040,11 +1043,13 @@ class BrowserController(
 
     private fun startHttpDownload(p: PendingDownload) {
         try {
-            val fileName = Downloads.fileName(p.url, p.contentDisposition, p.mimeType)
-            val req = DownloadManager.Request(Uri.parse(p.url)).apply {
+            // 只走 HTTPS 开着时：明文下载地址同样升级（DownloadManager 不经过 WebView 的拦截）
+            val url = (p.view?.tag as? TabState)?.let { upgradeFor(it, p.url) } ?: p.url
+            val fileName = Downloads.fileName(url, p.contentDisposition, p.mimeType)
+            val req = DownloadManager.Request(Uri.parse(url)).apply {
                 p.mimeType?.let { setMimeType(it) }
                 p.userAgent?.let { addRequestHeader("User-Agent", it) }
-                cookieManagerFor(p.view?.tag as? TabState).getCookie(p.url)?.let { addRequestHeader("Cookie", it) }
+                cookieManagerFor(p.view?.tag as? TabState).getCookie(url)?.let { addRequestHeader("Cookie", it) }
                 setTitle(fileName)
                 setDescription("唔姆唔姆正在努力下载中～")
                 setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
@@ -1070,11 +1075,21 @@ class BrowserController(
     /** blob: 只存在于网页内存里，让网页自己 fetch 出来转成 base64 再通过一次性 token 交给我们 */
     private fun startBlobDownload(p: PendingDownload) {
         val view = p.view ?: run { toast("下载失败了 🥺"); return }
+        purgeBlobs(null)
         if (pendingBlobs.size >= 3) { toast("前面的文件还在准备中，稍等一下哦"); return }
         val token = UUID.randomUUID().toString()
-        pendingBlobs[token] = p to originOf(view.url)
+        pendingBlobs[token] = PendingBlob(p, originOf(view.url), SystemClock.elapsedRealtime())
         toast("正在准备文件… 🎀")
         view.evaluateJavascript(BlobBridge.script(token, p.url, Downloads.MAX_BLOB_BYTES), null)
+    }
+
+    /**
+     * 清掉过期（网页一直没回应 / fetch 卡住）和作废（发起下载的页面已经跳走）的 blob 请求。
+     * 以前它们永远占着"最多 3 个"的名额：卡三次之后 blob 下载就一直报"前面的文件还在准备中"，直到重启 App。
+     */
+    private fun purgeBlobs(leaving: WebView?) {
+        val now = SystemClock.elapsedRealtime()
+        pendingBlobs.entries.removeAll { (_, e) -> now - e.at > BLOB_TIMEOUT_MS || (leaving != null && e.p.view === leaving) }
     }
 
     private fun originOf(url: String?): String? {
@@ -1085,13 +1100,16 @@ class BrowserController(
     }
 
     private fun onBlobMessage(json: String, origin: String?) {
+        // 先看大小再解析：网页（旧 WebView 的 JS 接口所有框架都能调）可以随便塞一个巨大的字符串过来，解析它会把内存撑爆
+        if (json.length > Downloads.MAX_BLOB_JSON_CHARS) return
         val o = runCatching { org.json.JSONObject(json) }.getOrNull() ?: return
         val token = o.optString("t")
         val entry = pendingBlobs[token] ?: return // 不是我们发起的，忽略
+        if (SystemClock.elapsedRealtime() - entry.at > BLOB_TIMEOUT_MS) { pendingBlobs.remove(token); return }
         // 能拿到来源时再核对一次：必须是发起下载的那个网站
-        if (origin != null && entry.second != null && originOf(origin) != entry.second) return
+        if (origin != null && entry.origin != null && originOf(origin) != entry.origin) return
         pendingBlobs.remove(token)
-        val p = entry.first
+        val p = entry.p
         val dataUrl = o.optString("d").takeIf { it.isNotEmpty() }
         val mime = o.optString("m")
         val error = o.optString("e")
@@ -1102,6 +1120,7 @@ class BrowserController(
         activity.lifecycleScope.launch {
             val decoded = kotlinx.coroutines.withContext(Dispatchers.Default) { Downloads.decodeDataUrl(dataUrl) }
             if (decoded == null) { toast("这个文件解析不了呢 🥺"); return@launch }
+            if (decoded.second.size > Downloads.MAX_BLOB_BYTES) { toast("文件太大啦（超过 50MB）🥺"); return@launch }
             val type = p.mimeType?.takeIf { it.isNotBlank() } ?: mime.takeIf { it.isNotBlank() } ?: decoded.first
             saveAndToast(Downloads.fileName(p.url, p.contentDisposition, type), type, decoded.second)
         }
@@ -1132,6 +1151,7 @@ class BrowserController(
 
     private companion object {
         const val MAX_LIVE_WEBVIEWS = 3
+        const val BLOB_TIMEOUT_MS = 60_000L
         val PREWARM_HOSTS = listOf(
             "m.bilibili.com", "www.xiaohongshu.com", "m.weibo.cn", "www.baidu.com", "www.zhihu.com", "m.youtube.com",
         )

@@ -151,6 +151,32 @@ class Downloads(private val context: Context, private val repo: CuteRepository) 
         /** blob 最大 50MB（要经过 JS 桥传 base64，太大会占很多内存） */
         const val MAX_BLOB_BYTES = 50L * 1024 * 1024
 
+        /** 桥上收到的消息最长多少字符：base64 膨胀 4/3，再留点 JSON 和 data: 头的余量；超过的一律丢弃 */
+        const val MAX_BLOB_JSON_CHARS = (MAX_BLOB_BYTES * 4 / 3 + 4096).toInt()
+
+        /**
+         * 文件名消毒：网页（Content-Disposition / URL / blob 的 download 属性）说了算的名字不能带路径、控制符、
+         * 反向书写符（把 gpj.exe 显示成 exe.jpg 骗人），不能以点开头（隐藏文件 / ".."），长度有限。
+         */
+        fun sanitizeFileName(raw: String): String {
+            val sb = StringBuilder(raw.length)
+            for (c in raw) {
+                when {
+                    c < ' ' || c == '\u007f' -> sb.append('_')
+                    c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|' -> sb.append('_')
+                    c in '\u200e'..'\u200f' || c in '\u202a'..'\u202e' || c in '\u2066'..'\u2069' || c == '\u061c' -> Unit
+                    else -> sb.append(c)
+                }
+            }
+            var n = sb.toString().trim().trimStart('.', ' ').trimEnd('.', ' ')
+            if (n.length > 120) {
+                val dot = n.lastIndexOf('.')
+                val ext = if (dot > 0 && n.length - dot <= 12) n.substring(dot) else ""
+                n = n.substring(0, 120 - ext.length) + ext
+            }
+            return n.ifEmpty { "download" }
+        }
+
         private val COMMON_EXT = mapOf(
             "image/png" to "png", "image/jpeg" to "jpg", "image/gif" to "gif", "image/webp" to "webp",
             "image/svg+xml" to "svg", "application/pdf" to "pdf", "text/plain" to "txt", "text/csv" to "csv",
@@ -158,7 +184,10 @@ class Downloads(private val context: Context, private val repo: CuteRepository) 
             "text/html" to "html",
         )
 
-        fun fileName(url: String, contentDisposition: String?, mime: String?): String {
+        fun fileName(url: String, contentDisposition: String?, mime: String?): String =
+            sanitizeFileName(rawFileName(url, contentDisposition, mime))
+
+        private fun rawFileName(url: String, contentDisposition: String?, mime: String?): String {
             val scheme = Uri.parse(url).scheme?.lowercase()
             if (scheme == "data" || scheme == "blob") {
                 if (!contentDisposition.isNullOrBlank() && contentDisposition.contains("filename", true)) {
