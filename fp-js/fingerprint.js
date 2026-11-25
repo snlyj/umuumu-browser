@@ -55,7 +55,11 @@
     if (!LANG) LANG = FPON ? 'zh-CN' : '';
     if (LANG === '-') LANG = '';
     if (LANG) { try { LANG = W.Intl.getCanonicalLocales(LANG)[0]; } catch (e) { LANG = ''; } }
-    var MK = Symbol.for('\u2063' + C.k); // 同一个窗口只打一次补丁（iframe 钩子 + 文档开始脚本可能都会来）
+    // 同一个窗口只打一次补丁（iframe 钩子 + 文档开始脚本可能都会来）。这几份脚本互相只能靠"全局共享的东西"通气：
+    // 用一个注册表 Symbol 当暗号——不要把它挂成 toString 的属性（Object.getOwnPropertySymbols 看得见，描述里还曾带着会话密钥，
+    // 等于把跨网站的会话标识交给了网页，也让网页一眼看出被打过补丁）。暗号只用来当 toString 的 this：网页拿不到它，
+    // 原生的 toString 对 Symbol 会抛 TypeError，打过补丁的会回 'umu'。暗号按网站派生，不同网站互相对不上。
+    var MK = Symbol.for('\u2063' + sub('mk'));
 
     // 画布噪声：按像素位置决定改哪个像素的哪个颜色通道的最低位，只改不透明像素。
     // 同一网站、同样大小的画布 → 同样的噪声（结果稳定）；不同网站 → 不同。
@@ -92,12 +96,12 @@
     function patch(w) {
       var FP = w.Function && w.Function.prototype; if (!FP) return;
       var oTS = FP.toString;
-      if (!oTS || oTS[MK]) return;
+      if (!oTS) return;
+      try { if (oTS.call(MK) === 'umu') return; } catch (e) { }
       var NM = new WeakMap(); // 假函数 -> 原函数，toString 时显示原函数的 "[native code]"
-      var ts = ({ toString() { var o = NM.get(this); return oTS.call(o === undefined ? this : o); } }).toString;
+      var ts = ({ toString() { if (this === MK) return 'umu'; var o = NM.get(this); return oTS.call(o === undefined ? this : o); } }).toString;
       NM.set(ts, oTS);
       var d0 = gopd(FP, 'toString'); d0.value = ts; defp(FP, 'toString', d0);
-      defp(ts, MK, { value: 1 });
 
       function P(name) { var c = w[name]; return c && c.prototype; }
       // 包装方法：impl(this, 原函数, arguments)

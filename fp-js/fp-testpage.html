@@ -44,6 +44,7 @@ async function run(){
   try{var dv=await n.mediaDevices.enumerateDevices();R.mediaDevices=dv.map(function(d){return d.kind}).join(',')}catch(e){R.mediaDevices='-'}
   R.connection=n.connection?(n.connection.effectiveType+' rtt '+n.connection.rtt+' down '+n.connection.downlink):'-';
   R.toStringNative=[HTMLCanvasElement.prototype.toDataURL,CanvasRenderingContext2D.prototype.getImageData,Function.prototype.toString,Object.getOwnPropertyDescriptor(Navigator.prototype,'hardwareConcurrency').get].map(function(f){return /\[native code\]/.test(Function.prototype.toString.call(f))}).join(',');
+  R.toStringKeys=JSON.stringify(Reflect.ownKeys(Function.prototype.toString).map(String));
   R.toStringText=String(HTMLCanvasElement.prototype.toDataURL);
   R.fnName=HTMLCanvasElement.prototype.toDataURL.name+'/'+HTMLCanvasElement.prototype.toDataURL.length+'/'+('prototype' in HTMLCanvasElement.prototype.toDataURL);
   R.motionListener=(function(){try{addEventListener('devicemotion',function(){});return 'ok'}catch(e){return 'err'}})();
