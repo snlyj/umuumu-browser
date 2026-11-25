@@ -352,7 +352,6 @@ class BrowserController(
         }
     }
 
-
     /** App 退到后台时调用：保存所有标签 + 各自的前进后退记录（写文件在 IO 线程） */
     fun saveSession() {
         if (sec.clearOnExit) return // 开了"退出时清除"：标签页不落盘
@@ -803,15 +802,19 @@ class BrowserController(
                         return true
                     }
                 }
-                // 这个网站的 Accept-Language 和 WebView 原生发的不一样（网站单独设了语言 / 防指纹例外）：GET 导航改用 loadUrl 带上正确的请求头
-                if (request.isForMainFrame && (scheme == "http" || scheme == "https") && request.method == "GET" && !request.isRedirect &&
-                    tab.langFixedUrl != uri.toString()
-                ) {
-                    val al = acceptLanguageFor(uri.toString())
-                    if (al != null) {
-                        tab.langFixedUrl = uri.toString()
-                        view.loadUrl(uri.toString(), extraHeaders(uri.toString()))
-                        return true
+                // 这个网站的 Accept-Language 和 WebView 原生发的不一样（网站单独设了语言 / 防指纹例外）：GET 导航改用 loadUrl 带上正确的请求头。
+                // langFixedUrl 只挡住我们自己这次 loadUrl 的重入；对上了就立刻清掉，同一条链接再点一次也能进去。
+                if (request.isForMainFrame && (scheme == "http" || scheme == "https") && request.method == "GET" && !request.isRedirect) {
+                    val target = uri.toString()
+                    if (tab.langFixedUrl == target) {
+                        tab.langFixedUrl = null
+                    } else {
+                        val al = acceptLanguageFor(target)
+                        if (al != null) {
+                            tab.langFixedUrl = target
+                            view.loadUrl(target, extraHeaders(target))
+                            return true
+                        }
                     }
                 }
                 if (request.isForMainFrame && (scheme == "http" || scheme == "https")) {
@@ -849,6 +852,7 @@ class BrowserController(
             }
 
             override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+                tab.langFixedUrl = null
                 // 兜底：前进/后退/恢复的 http 页面没经过 shouldOverrideUrlLoading，这里再升级一次
                 if (url != null && url.startsWith("http://", ignoreCase = true)) {
                     val up = upgradeFor(tab, url)
@@ -879,7 +883,6 @@ class BrowserController(
 
             override fun onPageFinished(view: WebView, url: String?) {
                 tab.loading = false
-                tab.langFixedUrl = null
                 tab.progress = 100
                 tab.canGoBack = view.canGoBack()
                 tab.canGoForward = view.canGoForward()
