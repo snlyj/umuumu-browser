@@ -81,6 +81,31 @@ class DnsMessageTest {
     }
 
     @Test
+    fun ignoresAddressesNotOnTheCnameChain() {
+        // 问 www.example.com：服务器多塞了 evil.test 的 A 记录（以及一条指回自己的 CNAME 环）——只收链上的
+        val b = MsgBuilder(an = 4).question("www.example.com", 1)
+        b.name("evil.test").u16(1).u16(1).u32(60).u16(4).bytes(6, 6, 6, 6)
+        val c = MsgBuilder(qd = 0).also { it.out.reset() }.name("cdn.example.net").build()
+        b.ptr(12).u16(5).u16(1).u32(300).u16(c.size).bytes(*c.map { it.toInt() and 0xFF }.toIntArray())
+        b.name("cdn.example.net").u16(1).u16(1).u32(60).u16(4).bytes(1, 2, 3, 4)
+        val loop = MsgBuilder(qd = 0).also { it.out.reset() }.name("www.example.com").build()
+        b.name("cdn.example.net").u16(5).u16(1).u32(60).u16(loop.size).bytes(*loop.map { it.toInt() and 0xFF }.toIntArray())
+        val r = DnsMessage.parse(b.build())
+        assertEquals(listOf("1.2.3.4"), r.addresses(DnsMessage.TYPE_A).map { it.hostAddress })
+    }
+
+    @Test
+    fun cnameRecordsMayBeOutOfOrder() {
+        val b = MsgBuilder(an = 3).question("a.test", 1)
+        b.name("c.test").u16(1).u16(1).u32(60).u16(4).bytes(7, 7, 7, 7)
+        val toC = MsgBuilder(qd = 0).also { it.out.reset() }.name("c.test").build()
+        val toB = MsgBuilder(qd = 0).also { it.out.reset() }.name("b.test").build()
+        b.name("b.test").u16(5).u16(1).u32(60).u16(toC.size).bytes(*toC.map { it.toInt() and 0xFF }.toIntArray())
+        b.name("a.test").u16(5).u16(1).u32(60).u16(toB.size).bytes(*toB.map { it.toInt() and 0xFF }.toIntArray())
+        assertEquals(listOf("7.7.7.7"), DnsMessage.parse(b.build()).addresses(DnsMessage.TYPE_A).map { it.hostAddress })
+    }
+
+    @Test
     fun parsesAaaa() {
         val b = MsgBuilder(an = 1).question("v6.test", 28)
         b.ptr(12).u16(28).u16(1).u32(3600).u16(16).bytes(0x24, 0x00, 0x32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1)

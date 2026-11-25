@@ -23,7 +23,7 @@ class LocalProxyTest {
             else -> throw UnknownHostException(h)
         }
     }
-    private val proxy = LocalProxy(resolver)
+    private val proxy = LocalProxy(resolver, allowLoopbackTargets = true) // 测试里的上游就在 127.0.0.1
     private val proxyPort = proxy.start()
 
     @After
@@ -110,6 +110,63 @@ class LocalProxyTest {
             c.getOutputStream().write("garbage\r\n\r\n".toByteArray())
             assertTrue(readLine(c.getInputStream()).startsWith("HTTP/1.1 400"))
         }
+    }
+
+    /** 正式配置：域名不能解析到本机（DNS 重绑定）；直接写 IP 的只拦连回代理自己 */
+    @Test
+    fun hostnamesResolvingToLoopbackAreForbiddenInProduction() {
+        val prodResolver = HostResolver { h ->
+            when (h) {
+                "rebind.test" -> listOf(loop)
+                "mixed.test" -> listOf(loop, InetAddress.getByName("169.254.169.254"), InetAddress.getByAddress(byteArrayOf(0, 0, 0, 0)))
+                "lan.test" -> listOf(InetAddress.getByName("10.255.255.1")) // 私有网段：放行（只是连不上）
+                "mapped.test" -> listOf(InetAddress.getByName("::ffff:127.0.0.1"))
+                "0x7f.1", "2130706433" -> listOf(loop) // 各种写法的回环
+                else -> IpLiteral.toAddress(h)?.let { listOf(it) } ?: throw UnknownHostException(h)
+            }
+        }
+        val prod = LocalProxy(prodResolver, connectTimeoutMs = 300)
+        val port = prod.start()
+        try {
+            fun status(req: String): String = Socket().use { c ->
+                c.connect(InetSocketAddress(loop, port), 2000); c.soTimeout = 5000
+                c.getOutputStream().write(req.toByteArray())
+                readLine(c.getInputStream())
+            }
+            assertTrue(status("CONNECT rebind.test:${upstream.localPort} HTTP/1.1\r\n\r\n").startsWith("HTTP/1.1 403"))
+            assertTrue(status("CONNECT mixed.test:443 HTTP/1.1\r\n\r\n").startsWith("HTTP/1.1 403"))
+            assertTrue(status("CONNECT mapped.test:443 HTTP/1.1\r\n\r\n").startsWith("HTTP/1.1 403"))
+            assertTrue(status("CONNECT 2130706433:$port HTTP/1.1\r\n\r\n").startsWith("HTTP/1.1 403"))
+            assertTrue(status("GET http://rebind.test:80/ HTTP/1.1\r\n\r\n").startsWith("HTTP/1.1 403"))
+            assertTrue(status("CONNECT [::ffff:7f00:1]:$port HTTP/1.1\r\n\r\n").startsWith("HTTP/1.1 403")) // 连回自己的另一种写法
+            assertFalse(status("CONNECT lan.test:443 HTTP/1.1\r\n\r\n").startsWith("HTTP/1.1 403")) // 私有网段不拦（连不连得上取决于网络）
+        } finally { prod.stop() }
+        // allowedTargets 的细节
+        assertEquals(listOf("93.184.216.34"), prod.allowedTargets("a.test", 443, listOf(loop, InetAddress.getByName("93.184.216.34"))).map { it.hostAddress })
+        assertEquals(listOf("127.0.0.1"), prod.allowedTargets("127.0.0.1", 8080, listOf(loop)).map { it.hostAddress }) // 用户直接写的 IP + 别的端口：放行
+    }
+
+    @Test
+    fun plainHttpAbsoluteUriEdgeCases() {
+        val seen = ArrayBlockingQueue<List<String>>(2)
+        Thread {
+            repeat(2) {
+                upstream.accept().use { s ->
+                    seen.put(readHead(s.getInputStream()))
+                    s.getOutputStream().write("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".toByteArray())
+                }
+            }
+        }.start()
+        val p = upstream.localPort
+        // 没有路径只有查询串；带 user:pass@；带 #fragment
+        for (target in listOf("http://upstream.test:$p?x=1", "http://user:pw@upstream.test:$p/a#frag")) {
+            connectProxy().use { c ->
+                c.getOutputStream().write("GET $target HTTP/1.1\r\nHost: upstream.test\r\n\r\n".toByteArray())
+                assertTrue(String(c.getInputStream().readBytes()).startsWith("HTTP/1.1 204"))
+            }
+        }
+        assertEquals("GET /?x=1 HTTP/1.1", seen.poll(3, TimeUnit.SECONDS)!![0])
+        assertEquals("GET /a HTTP/1.1", seen.poll(3, TimeUnit.SECONDS)!![0])
     }
 
     @Test
