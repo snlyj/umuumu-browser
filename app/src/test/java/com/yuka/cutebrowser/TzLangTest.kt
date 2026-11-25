@@ -139,6 +139,8 @@ class TzLangTest {
 
     @Test fun repositoryRoundTrip() = runBlocking {
         val repo = CuteRepository(ApplicationProvider.getApplicationContext())
+        // DataStore 文件在同一个 JVM 的测试之间是共用的，先复位
+        repo.clearSiteTzLang(); repo.updateSecurity { com.yuka.cutebrowser.data.SecurityPrefs() }
         val d = repo.security.first()
         assertFalse(d.tzOn); assertEquals("", d.tz); assertEquals("", d.lang)
         repo.updateSecurity { it.copy(tzOn = true, tz = "Asia/Tokyo", lang = "ja-JP") }

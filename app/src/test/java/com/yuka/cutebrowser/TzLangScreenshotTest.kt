@@ -75,7 +75,7 @@ class TzLangScreenshotTest {
     @Test
     fun langAndSiteDialogs() {
         rule.mainClock.autoAdvance = false
-        settle()
+        settleNoIdle()
         val act = rule.activity
         val repo = com.yuka.cutebrowser.data.CuteRepository(act)
         val controller = com.yuka.cutebrowser.browser.BrowserController(act, repo, {}, { false }, { _, _ -> })
@@ -92,11 +92,11 @@ class TzLangScreenshotTest {
         controller.applySecurity(controller.sec.copy(tzOn = true, tz = "America/Los_Angeles", lang = "en-US"))
         val tab = controller.current.apply { isHome = false; url = "https://www.example.com/" }
         act.setContent { CuteTheme(CuteThemeId.STRAWBERRY) { com.yuka.cutebrowser.ui.ShieldDialog(tab, controller) {} } }
-        settle()
+        settleNoIdle()
         captureScreenRoboImage("../../cute-browser-release/screens/32_shield_with_tzlang.png")
         controller.setSiteTzLang("www.example.com", com.yuka.cutebrowser.privacy.locale.SiteTzLang("Asia/Tokyo", null))
         act.setContent { CuteTheme(CuteThemeId.STRAWBERRY) { com.yuka.cutebrowser.ui.SiteTzLangDialog("www.example.com", controller) {} } }
-        settle()
+        settleNoIdle()
         captureScreenRoboImage("../../cute-browser-release/screens/33_site_tzlang_dialog.png")
     }
 }
