@@ -37,7 +37,7 @@ Live run (`UMU_LIVE_DOH=1`), OkHttp transport, A query:
 - Cloudflare cold ≈150 ms (incl. TLS; first run also JVM class loading) / warm median ≈12–20 ms; Quad9 ≈90 / ≈9 ms; Google ≈130 / ≈70 ms; 阿里 ≈0.9–1.3 s / ≈220 ms; DNSPod ≈1.1–1.3 s / ≈190 ms (CN providers are far from this US box; in mainland China expect the opposite).
 - Full HTTPS GET with new connection each time (keep-alive off), median of 5: example.com proxy 97 ms vs direct 93 ms; cloudflare.com 107 vs 107; github.com 138 vs 131. Cached resolve: ~0.02 ms. Caveat: the box's system DNS returns fake 198.18.x IPs through a sandbox egress gateway, so "direct" isn't a clean baseline.
 - Unit-test timings: 200 KB echo through a tunnel, happy-eyeballs fallback past a blackhole address < 2 s (one 250 ms step).
-- Not measured: anything on Android (no stable device/emulator), memory, battery, release APK size. Debug APK 12,620,587 → 12,945,980 bytes (+OkHttp/okio, unminified).
+- Not measured: anything on Android (no stable device/emulator), memory, battery, release APK size. Debug APK 12,620,587 (v1.3) → 13,169,058 bytes (+OkHttp/okio + dns code, unminified).
 
 ## Limitations
 - DownloadManager downloads don't use the WebView proxy → their hostnames go to system DNS (blob:/data: downloads are in-page, unaffected).
