@@ -52,7 +52,7 @@ class ScreenshotTest {
         // 主题和会话是异步读的。完整套件更慢，若一上来就把时钟停掉，主线程协程被冻住，界面会一直是空白底色。
         // 不能用 waitUntil/waitForIdle：主页小兔子的耳朵是无限动画，autoAdvance 开着时永远等不到空闲。
         rule.mainClock.autoAdvance = true
-        val deadline = System.currentTimeMillis() + 10_000
+        val deadline = System.currentTimeMillis() + 20_000
         while (System.currentTimeMillis() < deadline) {
             Thread.sleep(50)
             org.robolectric.shadows.ShadowLooper.idleMainLooper()
@@ -63,6 +63,7 @@ class ScreenshotTest {
             }
         }
         rule.mainClock.autoAdvance = false
+        throw AssertionError("waitForBrowser: 20s 内没有等到「菜单」，主页可能一直停在启动底色")
     }
 
     private fun settle() {
@@ -193,7 +194,12 @@ class ScreenshotTest {
                 }
             }
         }
-        rule.waitForIdle()
+        // BunnyProgressBar 有循环动画，waitForIdle 在完整套件里可能空等 60s
+        rule.mainClock.autoAdvance = false
+        repeat(4) {
+            org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            rule.mainClock.advanceTimeBy(200)
+        }
         rule.onRoot().captureRoboImage("$OUT/08_components.png")
     }
 }

@@ -111,7 +111,6 @@ fun CuteSheets(
     )
     val scope = rememberCoroutineScope()
     val close: () -> Unit = { onChange(SheetType.None) }
-    BackHandler { onChange(sheetOnBack(sheet)) }
 
     ModalBottomSheet(
         onDismissRequest = { onChange(sheetOnBack(sheet)) },
@@ -121,6 +120,9 @@ fun CuteSheets(
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
         dragHandle = { CuteDragHandle() },
     ) {
+        // 必须写在 Dialog 内容里，才会挂到面板自己的返回 dispatcher。
+        // 放在外面只会接到 Activity，真机上返回键先被面板吃掉（再被我们 veto 掉），等于按了没反应。
+        BackHandler { onChange(sheetOnBack(sheet)) }
         Column(
             Modifier
                 .fillMaxWidth()
