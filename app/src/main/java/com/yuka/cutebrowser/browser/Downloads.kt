@@ -122,7 +122,12 @@ class Downloads(private val context: Context, private val repo: CuteRepository) 
                     put(MediaStore.Downloads.IS_PENDING, 1)
                 }
                 val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: error("insert failed")
-                resolver.openOutputStream(uri)!!.use { it.write(bytes) }
+                try {
+                    resolver.openOutputStream(uri)!!.use { it.write(bytes) }
+                } catch (e: Exception) {
+                    runCatching { resolver.delete(uri, null, null) } // 写失败了：别在「下载」里留下一个永远 pending 的空条目
+                    throw e
+                }
                 values.clear()
                 values.put(MediaStore.Downloads.IS_PENDING, 0)
                 resolver.update(uri, values, null, null)
@@ -172,6 +177,27 @@ class Downloads(private val context: Context, private val repo: CuteRepository) 
             return URLUtil.guessFileName(url, contentDisposition, mime)
         }
 
+        /** 百分号解码成原始字节（不能走字符串：二进制内容经过 UTF-8 解码会被破坏）；'+' 在 data: URL 里就是加号 */
+        internal fun percentDecode(s: String): ByteArray {
+            val src = s.toByteArray(Charsets.UTF_8)
+            val out = java.io.ByteArrayOutputStream(src.size)
+            var i = 0
+            while (i < src.size) {
+                val c = src[i].toInt()
+                if (c == '%'.code && i + 2 < src.size && hex(src[i + 1].toInt()) >= 0 && hex(src[i + 2].toInt()) >= 0) {
+                    out.write(hex(src[i + 1].toInt()) * 16 + hex(src[i + 2].toInt())); i += 3
+                } else { out.write(c); i++ }
+            }
+            return out.toByteArray()
+        }
+
+        private fun hex(c: Int): Int = when (c) {
+            in '0'.code..'9'.code -> c - '0'.code
+            in 'a'.code..'f'.code -> c - 'a'.code + 10
+            in 'A'.code..'F'.code -> c - 'A'.code + 10
+            else -> -1
+        }
+
         /** 解析 data: URL，返回 (mime, 内容)；格式不对返回 null */
         fun decodeDataUrl(url: String): Pair<String, ByteArray>? = runCatching {
             if (!url.startsWith("data:", ignoreCase = true)) return null
@@ -181,7 +207,7 @@ class Downloads(private val context: Context, private val repo: CuteRepository) 
             val payload = url.substring(comma + 1)
             val isB64 = meta.endsWith(";base64", ignoreCase = true)
             val mime = meta.substringBefore(';').trim().ifBlank { "text/plain" }
-            val bytes = if (isB64) Base64.decode(payload, Base64.DEFAULT) else Uri.decode(payload).toByteArray()
+            val bytes = if (isB64) Base64.decode(payload, Base64.DEFAULT) else percentDecode(payload)
             mime to bytes
         }.getOrNull()
     }
