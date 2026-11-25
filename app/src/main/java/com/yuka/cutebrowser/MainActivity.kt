@@ -169,8 +169,9 @@ class MainActivity : FragmentActivity(), AppProtection {
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                 }
                 CuteTheme(theme, incognito = incognito) {
-                    BrowserScreen(controller, repo, this)
-                    if (locked) LockScreen { unlock() }
+                    // 上锁时根本不组合浏览界面：读屏软件、没关掉的弹窗（它们是独立窗口，盖不住）都看不到后面的内容；
+                    // WebView 本身还在 controller 里，解锁后原样接上
+                    if (locked) LockScreen { unlock() } else BrowserScreen(controller, repo, this)
                 }
             }
         }
@@ -261,8 +262,12 @@ class MainActivity : FragmentActivity(), AppProtection {
 
     private fun handleIntent(intent: Intent?, initial: Boolean) {
         intent ?: return
+        // 从"最近任务"里恢复进程时，系统会把当初启动它的 intent 再给一遍；不能因此又打开一次同一个链接
+        if (initial && intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
         when (intent.action) {
             Intent.ACTION_VIEW -> intent.dataString?.let { url ->
+                // 清单里只声明了 http/https，但别的 App 可以用显式 intent 塞任何协议进来（javascript:、file:、content: …）：只放行网页
+                if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) return
                 if (initial) controller.open(url) else controller.newTab(url)
             }
             Intent.ACTION_WEB_SEARCH -> intent.getStringExtra(SearchManager.QUERY)?.let { q ->
