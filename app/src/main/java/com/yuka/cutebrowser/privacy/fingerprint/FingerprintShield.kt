@@ -27,15 +27,16 @@ import java.util.WeakHashMap
  * 只在主线程调用。
  */
 class FingerprintShield(private val appContext: Context) {
-    var enabled = true
+    // 这些会在加密 DNS 的工作线程里被读到（acceptLanguageFor → isExempt / spoof），主线程写入，所以要可见
+    @Volatile var enabled = true
         private set
-    var strict = false
+    @Volatile var strict = false
         private set
     /** 用户关掉防指纹的网站（eTLD+1） */
-    var exceptions: Set<String> = emptySet()
+    @Volatile var exceptions: Set<String> = emptySet()
         private set
     /** 伪造时区/语言的设置（没开就是 [SpoofConfig] 默认值） */
-    var spoof: SpoofConfig = SpoofConfig()
+    @Volatile var spoof: SpoofConfig = SpoofConfig()
         private set
 
     /** 要不要往网页里注入脚本：防指纹开着，或时区/语言伪造有内容 */

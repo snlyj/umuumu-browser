@@ -157,7 +157,7 @@ class BrowserController(
     @Volatile var sec = SecurityPrefs()
         private set
     /** 每个网站单独的时区/语言（必须在 init 之前初始化） */
-    private var tzSites: Map<String, SiteTzLang> = emptyMap()
+    @Volatile private var tzSites: Map<String, SiteTzLang> = emptyMap()
     /** 用户允许用 http 打开的网站（隐身模式下的选择只在本次有效） */
     @Volatile var httpAllowed: Set<String> = emptySet()
     private val incognitoHttpAllowed = HashSet<String>()
