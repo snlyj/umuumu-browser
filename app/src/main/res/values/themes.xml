@@ -1,0 +1,17 @@
+<resources>
+    <style name="Theme.CuteBrowser" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/milk_white</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:colorAccent">@color/accent_pink</item>
+    </style>
+
+    <!-- 只给 WebView 用：深色主题让网页走 prefers-color-scheme: dark / 算法变暗 -->
+    <style name="Theme.CuteBrowser.WebDark" parent="android:Theme.Material.NoActionBar" />
+
+    <style name="Theme.CuteBrowser.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/milk_white</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_icon</item>
+        <item name="postSplashScreenTheme">@style/Theme.CuteBrowser</item>
+    </style>
+</resources>

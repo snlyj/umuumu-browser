@@ -1,0 +1,8 @@
+# 手写的 Baseline Profile：启动路径 + 首屏 + 常用交互的热点类/方法，
+# 安装后由 ART 提前编译（AOT），减少首次启动和首次滑动时的解释执行/JIT。
+# Compose、Material3、Activity 等库自带的 profile 会由 profileinstaller 一并合并。
+HSPLcom/yuka/cutebrowser/**->**(**)**
+Lcom/yuka/cutebrowser/**;
+HSPLcom/yuka/cutebrowser/ui/**->**(**)**
+HSPLcom/yuka/cutebrowser/browser/**->**(**)**
+HSPLcom/yuka/cutebrowser/data/**->**(**)**
