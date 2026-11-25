@@ -33,6 +33,7 @@ import androidx.lifecycle.lifecycleScope
 import com.yuka.cutebrowser.browser.AdBlocker
 import com.yuka.cutebrowser.browser.BrowserController
 import com.yuka.cutebrowser.browser.SessionStore
+import com.yuka.cutebrowser.browser.UrlUtils
 import com.yuka.cutebrowser.data.CuteRepository
 import com.yuka.cutebrowser.dns.DohManager
 import com.yuka.cutebrowser.data.SecurityPrefs
@@ -52,6 +53,7 @@ import java.io.File
 class MainActivity : FragmentActivity(), AppProtection {
     private lateinit var repo: CuteRepository
     private lateinit var controller: BrowserController
+    private val dohNotice: (String) -> Unit = { msg -> controller.toast(msg) }
 
     private val storagePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         controller.onStoragePermissionResult(granted)
@@ -124,10 +126,13 @@ class MainActivity : FragmentActivity(), AppProtection {
         lifecycleScope.launch { repo.sitePerms.collect { controller.sitePerms = it } }
         lifecycleScope.launch(Dispatchers.IO) { repo.migrateIfNeeded() }
         // App 内加密 DNS（默认关；关着时只读一次设置）
-        DohManager.notice = { msg -> controller.toast(msg) }
+        DohManager.notice = dohNotice
         lifecycleScope.launch { DohManager.run(applicationContext) }
 
-        val startIntent = intent
+        // 从最近任务里点回来 / 系统重建 Activity 时，系统会把当初那个 VIEW intent 再发一遍：忽略，不然会重复开一个标签
+        val startIntent = intent.takeIf {
+            savedInstanceState == null && (it.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0
+        }
         lifecycleScope.launch {
             // 安全设置要在第一个 WebView 创建之前就位
             val s = repo.security.first()
@@ -246,23 +251,28 @@ class MainActivity : FragmentActivity(), AppProtection {
             locked = true
         }
         if (locked && sessionReady) unlock()
+        controller.onHostResume()
     }
 
     override fun onStop() {
         super.onStop()
+        // 真正退到后台才存会话、暂停网页：权限弹窗/指纹验证/分享面板盖上来时 onPause 也会触发，那时不该白白 saveState 并停掉网页
         stoppedAt = SystemClock.elapsedRealtime()
+        controller.onHostPause()
         if (sec.clearOnExit) runCatching { clearMarker.createNewFile() }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        if ((intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return
         handleIntent(intent, initial = false)
     }
 
     private fun handleIntent(intent: Intent?, initial: Boolean) {
         intent ?: return
         when (intent.action) {
-            Intent.ACTION_VIEW -> intent.dataString?.let { url ->
+            // 只收 http(s)：显式 intent 可以塞 javascript: / file: / content: 之类的地址，不能直接交给 WebView
+            Intent.ACTION_VIEW -> intent.dataString?.takeIf { UrlUtils.isWebUrl(it) }?.let { url ->
                 if (initial) controller.open(url) else controller.newTab(url)
             }
             Intent.ACTION_WEB_SEARCH -> intent.getStringExtra(SearchManager.QUERY)?.let { q ->
@@ -270,16 +280,6 @@ class MainActivity : FragmentActivity(), AppProtection {
                 controller.submit(q)
             }
         }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        controller.onHostPause()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        controller.onHostResume()
     }
 
     @Suppress("DEPRECATION")
@@ -295,6 +295,10 @@ class MainActivity : FragmentActivity(), AppProtection {
     override fun onDestroy() {
         if (isFinishing && sec.clearOnExit) controller.clearAllDataOnExit { clearMarker.delete() }
         controller.destroyAll()
+        // 这两个是进程级单例，别让它们的回调一直拿着已经销毁的 Activity（经由 controller）
+        // （新 Activity 可能已经抢先装上了自己的回调，所以只清掉还是自己的）
+        if (DohManager.notice === dohNotice) DohManager.notice = null
+        controller.releaseGlobals()
         super.onDestroy()
     }
 

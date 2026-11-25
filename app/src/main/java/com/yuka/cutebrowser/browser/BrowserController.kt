@@ -62,12 +62,16 @@ import com.yuka.cutebrowser.data.SitePermEntry
 import com.yuka.cutebrowser.security.HttpsUpgrade
 import com.yuka.cutebrowser.security.WebFeatures
 import com.yuka.cutebrowser.security.WebHardening
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import com.yuka.cutebrowser.dns.DohManager
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+
+private const val CRASH_LOOP_MS = 8_000L
 
 /** 一个标签页的状态（Compose 可观察） */
 @Stable
@@ -83,6 +87,8 @@ class TabState(val id: Long, val incognito: Boolean = false) {
     /** 为了补 Accept-Language 刚用 loadUrl 重发过的网址（防止重复处理） */
     var langFixedUrl: String? = null
     var lastUsed = 0L
+    /** 上次渲染进程崩溃的时间（防止崩溃后自动重载又崩的死循环） */
+    var lastCrashAt = -CRASH_LOOP_MS
 
     var url by mutableStateOf("")
     var title by mutableStateOf("新标签页")
@@ -175,11 +181,13 @@ class BrowserController(
     val fingerprint = FingerprintShield(activity.applicationContext)
     private val session = SessionStore(activity.applicationContext)
     private val main = Handler(Looper.getMainLooper())
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var nextId = 1L
     private var pendingDownload: PendingDownload? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private val pendingBlobs = HashMap<String, Pair<PendingDownload, String?>>()
+    private val pendingBlobTimes = HashMap<String, Long>()
     private val blobBridge = BlobBridge { json, origin -> activity.runOnUiThread { onBlobMessage(json, origin) } }
 
     /** 空闲时预热好的一个 WebView，第一次打开网页时直接拿来用 */
@@ -187,9 +195,16 @@ class BrowserController(
 
     val current: TabState get() = tabs[currentIndex.coerceIn(0, tabs.lastIndex)]
 
+    private val langHook: (String) -> String? = { host -> acceptLanguageFor("http://$host/") }
+
+    /** Activity 销毁时调用：DohManager 是进程级单例，只清掉还指向自己的回调 */
+    fun releaseGlobals() {
+        if (DohManager.acceptLanguageFor === langHook) DohManager.acceptLanguageFor = null
+    }
+
     init {
         ProcessLocale.apply(LangPolicy.processLang(spoofConfig(), sec.antiFp)) // 必须在第一个 WebView 创建之前
-        DohManager.acceptLanguageFor = { host -> acceptLanguageFor("http://$host/") }
+        DohManager.acceptLanguageFor = langHook
         newTab()
         activity.lifecycleScope.launch(Dispatchers.IO) { fingerprint.preload() }
     }
@@ -312,7 +327,8 @@ class BrowserController(
             normal.map { SessionStore.SavedTab(it.id, it.url, it.title, it.isHome) },
             normal.indexOf(cur).coerceAtLeast(0),
         )
-        activity.lifecycleScope.launch(Dispatchers.IO) { session.write(snap, states, keep) }
+        // 不用 lifecycleScope：退出 App 时 onDestroy 紧跟着 onStop，协程可能还没开始就被取消，会话就没存上
+        ioScope.launch { session.write(snap, states, keep) }
     }
 
     private fun snapshot(v: WebView): Bundle? = runCatching {
@@ -354,6 +370,8 @@ class BrowserController(
         }
         tab.canGoBack = v.canGoBack()
         tab.canGoForward = v.canGoForward()
+        // 刚多出一个 WebView：马上（组合阶段之外）把最旧的后台标签回收掉，别让存活数一直比上限多一个
+        main.post { trimLiveWebViews(MAX_LIVE_WEBVIEWS) }
         return v
     }
 
@@ -398,14 +416,25 @@ class BrowserController(
         tab.webView = null
         tab.loading = false
         tab.progress = 100
+        disposeWebView(v)
+    }
+
+    /** 彻底销毁一个 WebView：先从界面摘下来（还挂着就 destroy 会出警告/崩溃），停掉加载，断开回调，避免继续持有 Activity */
+    private fun disposeWebView(v: WebView) {
         (v.parent as? ViewGroup)?.removeView(v)
-        v.stopLoading()
-        v.destroy()
+        runCatching {
+            v.stopLoading()
+            v.setDownloadListener(null)
+            v.webChromeClient = null
+            v.webViewClient = WebViewClient()
+            v.tag = null
+            v.destroy()
+        }
     }
 
     /** 系统内存紧张：回收后台标签的 WebView 和预热的备用 WebView */
     fun onLowMemory() {
-        spare?.destroy(); spare = null
+        spare?.let { disposeWebView(it) }; spare = null
         trimLiveWebViews(1)
     }
 
@@ -418,7 +447,7 @@ class BrowserController(
 
     /** 保存所有 WebView 的状态后销毁，界面重新挂载时按新设置重建 */
     private fun rebuildWebViews() {
-        spare?.destroy(); spare = null
+        spare?.let { disposeWebView(it) }; spare = null
         val hadLive = tabs.any { it.webView != null }
         tabs.forEach { release(it) }
         if (hadLive) webGeneration++
@@ -428,11 +457,7 @@ class BrowserController(
         val idx = tabs.indexOf(tab)
         if (idx < 0) return
         tabs.removeAt(idx)
-        tab.webView?.let { v ->
-            (v.parent as? ViewGroup)?.removeView(v)
-            v.stopLoading()
-            v.destroy()
-        }
+        tab.webView?.let { disposeWebView(it) }
         tab.webView = null
         tab.savedState = null
         if (tab.incognito && tabs.none { it.incognito }) endIncognitoSession()
@@ -579,7 +604,8 @@ class BrowserController(
     }
 
     fun clearWebHistory() {
-        tabs.forEach { it.webView?.clearHistory(); it.savedState = null }
+        // 连回收时/上次退出时存下来的前进后退记录也一起丢掉（这些标签下次显示时只按当前网址重新打开）
+        tabs.forEach { it.webView?.clearHistory(); it.savedState = null; it.hasDiskState = false }
     }
 
     /** 整个 App 退到后台时：保存会话，暂停所有网页的 JS/计时器 */
@@ -596,8 +622,11 @@ class BrowserController(
     }
 
     fun destroyAll() {
-        tabs.forEach { it.webView?.destroy(); it.webView = null }
-        spare?.destroy(); spare = null
+        // Activity 要销毁了：别让 WebView / 文件选择回调 / 权限弹窗继续指着它
+        fileCallback?.onReceiveValue(null); fileCallback = null
+        pendingBlobs.clear(); pendingBlobTimes.clear(); pendingDownload = null; permissionPrompt = null
+        tabs.forEach { t -> t.webView?.let { disposeWebView(it) }; t.webView = null }
+        spare?.let { disposeWebView(it) }; spare = null
         incognitoProfile?.let { name -> incognitoProfile = null; main.post { WebHardening.deleteProfile(name) } }
     }
 
@@ -845,11 +874,16 @@ class BrowserController(
                 // 网页渲染进程崩了/被系统杀了：把这个 WebView 扔掉，下次显示时重建，不让整个 App 崩
                 if (tab.webView === view) {
                     tab.webView = null
-                    (view.parent as? ViewGroup)?.removeView(view)
-                    view.destroy()
+                    disposeWebView(view)
                     tab.loading = false
-                    if (tabs.getOrNull(currentIndex) === tab) webGeneration++
-                } else view.destroy()
+                    val now = SystemClock.uptimeMillis()
+                    if (now - tab.lastCrashAt < CRASH_LOOP_MS) {
+                        // 刚重建就又崩了：别再自动重载（会一直崩一直重载），回主页让用户自己决定
+                        tab.isHome = true
+                        toast("这个网页一直崩溃，先回主页啦 🥺")
+                    } else if (tabs.getOrNull(currentIndex) === tab) webGeneration++
+                    tab.lastCrashAt = now
+                } else disposeWebView(view)
                 return true
             }
         }
@@ -996,7 +1030,7 @@ class BrowserController(
                 activity.startActivity(intent)
             } catch (e: ActivityNotFoundException) {
                 val fallback = intent.getStringExtra("browser_fallback_url")
-                if (!fallback.isNullOrBlank()) view.loadUrl(fallback) else toast("没有找到能打开它的 App 哦")
+                if (!fallback.isNullOrBlank() && UrlUtils.isWebUrl(fallback)) view.loadUrl(fallback) else toast("没有找到能打开它的 App 哦")
             }
         } catch (e: Exception) {
             toast("这个链接打不开呢 🥺")
@@ -1057,9 +1091,13 @@ class BrowserController(
     /** blob: 只存在于网页内存里，让网页自己 fetch 出来转成 base64 再通过一次性 token 交给我们 */
     private fun startBlobDownload(p: PendingDownload) {
         val view = p.view ?: run { toast("下载失败了 🥺"); return }
+        // 网页跳走/关掉后桥永远收不到回复：超过 60 秒的请求直接丢掉，免得把 3 个名额占满、之后再也下载不了 blob
+        val now = SystemClock.uptimeMillis()
+        pendingBlobTimes.entries.removeAll { (t, at) -> (now - at > BLOB_TIMEOUT_MS).also { if (it) pendingBlobs.remove(t) } }
         if (pendingBlobs.size >= 3) { toast("前面的文件还在准备中，稍等一下哦"); return }
         val token = UUID.randomUUID().toString()
         pendingBlobs[token] = p to originOf(view.url)
+        pendingBlobTimes[token] = now
         toast("正在准备文件… 🎀")
         view.evaluateJavascript(BlobBridge.script(token, p.url, Downloads.MAX_BLOB_BYTES), null)
     }
@@ -1078,6 +1116,7 @@ class BrowserController(
         // 能拿到来源时再核对一次：必须是发起下载的那个网站
         if (origin != null && entry.second != null && originOf(origin) != entry.second) return
         pendingBlobs.remove(token)
+        pendingBlobTimes.remove(token)
         val p = entry.first
         val dataUrl = o.optString("d").takeIf { it.isNotEmpty() }
         val mime = o.optString("m")
@@ -1119,6 +1158,7 @@ class BrowserController(
 
     private companion object {
         const val MAX_LIVE_WEBVIEWS = 3
+        const val BLOB_TIMEOUT_MS = 60_000L
         val PREWARM_HOSTS = listOf(
             "m.bilibili.com", "www.xiaohongshu.com", "m.weibo.cn", "www.baidu.com", "www.zhihu.com", "m.youtube.com",
         )

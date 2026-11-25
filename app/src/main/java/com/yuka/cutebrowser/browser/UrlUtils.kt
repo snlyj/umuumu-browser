@@ -19,5 +19,12 @@ object UrlUtils {
         return engine.searchUrl(text)
     }
 
+    /** 只放行带主机名的 http(s) 网址（外部 App 传来的链接、intent 的 fallback 地址都用它过滤，挡掉 javascript: / file: / content: 等） */
+    fun isWebUrl(url: String?): Boolean {
+        val u = url?.trim() ?: return false
+        if (!(u.startsWith("http://", true) || u.startsWith("https://", true))) return false
+        return runCatching { !Uri.parse(u).host.isNullOrBlank() }.getOrDefault(false)
+    }
+
     fun host(url: String): String = runCatching { Uri.parse(url).host }.getOrNull()?.removePrefix("www.") ?: url
 }
