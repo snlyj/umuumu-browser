@@ -68,6 +68,16 @@ object Domains {
         "com.tw", "co.jp", "ne.jp", "or.jp", "ac.jp", "co.kr", "or.kr", "com.au", "net.au", "org.au",
         "com.br", "com.sg", "com.my", "co.in", "co.nz", "com.mx", "com.tr", "co.za", "co.id", "com.vn",
         "github.io", "blogspot.com", "appspot.com", "herokuapp.com", "vercel.app", "netlify.app", "pages.dev",
+        // 更多国家的二级后缀：缺了它们，不同的网站会被当成"同一个网站"（防指纹的"这个网站例外"、每站种子、第三方判断都按它算）
+        "com.ar", "com.co", "com.ph", "com.pk", "com.ng", "com.ua", "com.pl", "com.eg", "com.sa", "com.pe", "com.ve",
+        "co.th", "co.il", "co.ke", "co.kr", "or.id", "ac.id", "web.id", "go.id", "co.ve", "edu.au", "gov.au", "edu.hk",
+        "org.hk", "org.tw", "edu.tw", "gov.tw", "org.br", "net.br", "gov.br", "org.in", "net.in", "gov.in", "ac.in",
+        "net.my", "org.my", "org.sg", "net.sg", "edu.sg", "net.nz", "org.nz", "org.za", "ne.kr", "go.kr", "go.jp", "gr.jp",
+        // 共享托管：每个子域都是不同的主人
+        "web.app", "firebaseapp.com", "workers.dev", "gitlab.io", "azurewebsites.net", "cloudfront.net", "amazonaws.com",
+        "myshopify.com", "wordpress.com", "weebly.com", "wixsite.com", "glitch.me", "onrender.com", "fly.dev", "surge.sh",
+        "neocities.org", "duckdns.org", "ngrok.io", "ngrok-free.app", "repl.co", "replit.app", "github.dev", "codeberg.page",
+        "bitbucket.io", "tumblr.com", "substack.com", "notion.site", "framer.app", "webflow.io", "carrd.co", "lofter.com",
     )
 
     /** 近似的"可注册域名"（eTLD+1）。没有完整的公共后缀表，只覆盖常见的二级后缀 */
@@ -313,7 +323,7 @@ class FilterEngine {
         while (s.startsWith("*")) { s = s.substring(1); flags = flags and (HOST or START).inv() }
         while (s.endsWith("*")) { s = s.substring(0, s.length - 1); flags = flags and END.inv() }
         s = s.lowercase()
-        if (s.isEmpty() && include == null) return // 匹配一切的规则太危险
+        if (s.all { it == '^' || it == '*' } && include == null) return // 空的、或只有 ^ * 的规则几乎匹配一切（`**^**` 会把所有请求都拦掉）：太危险
 
         val rule = NetRule(s, flags, mask, include?.toTypedArray(), exclude?.toTypedArray())
         val set = when {
