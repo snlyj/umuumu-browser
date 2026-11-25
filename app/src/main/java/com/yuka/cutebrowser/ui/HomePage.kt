@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -104,11 +105,18 @@ fun HomePage(
     modifier: Modifier = Modifier,
 ) {
     val p = LocalCutePalette.current
-    Column(
+    // 平板/横屏：内容最宽 640dp 并居中，不会拉成一条很宽的长条
+    Box(
         modifier
             .fillMaxSize()
             .background(p.background)
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(rememberScrollState()),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+    Column(
+        Modifier
+            .widthIn(max = 640.dp)
+            .fillMaxWidth()
             .padding(horizontal = 20.dp, vertical = 12.dp),
     ) {
         // 问候 + 小兔子
@@ -117,7 +125,7 @@ fun HomePage(
                 Text(remember { greeting() }, color = p.subText, fontSize = 15.sp)
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("唔姆唔姆", color = p.accent, fontSize = 30.sp, fontWeight = FontWeight.Black)
+                    Text("唔姆唔姆", color = p.accentInk, fontSize = 30.sp, fontWeight = FontWeight.Black)
                     Spacer(Modifier.width(6.dp))
                     Icon(CuteIcons.Bow, null, tint = p.accent, modifier = Modifier.size(28.dp))
                 }
@@ -177,6 +185,7 @@ fun HomePage(
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(12.dp))
+    }
     }
 }
 
@@ -264,7 +273,9 @@ fun BunnyMascot(modifier: Modifier = Modifier, masked: Boolean = false) {
         // 耳朵
         val earW = w * 0.17f
         val earH = h * 0.42f
-        listOf(-1f to w * 0.36f, 1f to w * 0.64f).forEach { (dir, cx) ->
+        for (side in 0..1) {
+            val dir = if (side == 0) -1f else 1f
+            val cx = if (side == 0) w * 0.36f else w * 0.64f
             rotate(degrees = dir * (10f + wiggle), pivot = Offset(cx, h * 0.48f)) {
                 drawRoundRect(white, Offset(cx - earW / 2, h * 0.08f), Size(earW, earH), CornerRadius(earW / 2))
                 drawRoundRect(

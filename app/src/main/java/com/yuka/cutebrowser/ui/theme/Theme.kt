@@ -35,6 +35,8 @@ data class CutePalette(
     val subText: Color,
     val onAccent: Color,
     val isDark: Boolean,
+    /** 用在文字/小图标上的强调色：浅色主题里比 accent 更深一点，保证对比度 ≥ 4.5:1；深色主题就是 accent 本身 */
+    val accentInk: Color = accent,
 )
 
 val StrawberryPalette = CutePalette(
@@ -45,9 +47,12 @@ val StrawberryPalette = CutePalette(
     mint = Color(0xFFD4F5E9),
     accent = Color(0xFFFF8FAB),
     text = Color(0xFF5A4A5E),
-    subText = Color(0xFF9C8AA0),
-    onAccent = Color.White,
+    // 原来的 #9C8AA0 在奶白底上只有 3.05:1；稍微加深到 4.5:1 以上，仍是柔和的灰紫色
+    subText = Color(0xFF76657C),
+    // 粉色按钮上的字改成深莓色：原来的白色在 #FF8FAB 上只有 2.1:1
+    onAccent = Color(0xFF4A3A4E),
     isDark = false,
+    accentInk = Color(0xFFB83A66),
 )
 
 val SakuraPalette = CutePalette(
@@ -58,9 +63,10 @@ val SakuraPalette = CutePalette(
     mint = Color(0xFFEAF7EF),
     accent = Color(0xFFF48FB1),
     text = Color(0xFF6B4C5A),
-    subText = Color(0xFFAA8C9A),
-    onAccent = Color.White,
+    subText = Color(0xFF86687A),
+    onAccent = Color(0xFF4A3A4E),
     isDark = false,
+    accentInk = Color(0xFFB83A66),
 )
 
 val StarryPalette = CutePalette(

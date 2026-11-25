@@ -109,7 +109,7 @@ fun DohSettingsSection() {
                     if (valid) upd { it.copy(customUrl = text) }
                 }
             }
-            if (text.isNotEmpty() && !valid) Text("要以 https:// 开头哦", color = p.accent, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+            if (text.isNotEmpty() && !valid) Text("要以 https:// 开头哦", color = p.accentInk, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
             Text("自定义服务器的域名会先用系统 DNS 查一次（填 IP 地址的网址就不用）", color = p.subText, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
         }
 

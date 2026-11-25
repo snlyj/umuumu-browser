@@ -16,6 +16,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
@@ -45,6 +46,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -72,40 +74,67 @@ fun JellyButton(
     val p = LocalCutePalette.current
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(
+    // 缩放/透明度只在绘制阶段读取，按下时不会重组
+    val scale = animateFloatAsState(
         targetValue = if (pressed) 0.8f else 1f,
         animationSpec = spring(dampingRatio = 0.32f, stiffness = 600f),
         label = "jelly",
     )
+    // 外层至少 48dp（无障碍的最小点击区域），里面的"软糖"仍是 size 大小，外观不变
+    val hit = maxOf(size, MinTouchTarget)
     Box(
         modifier = modifier
-            .size(size)
-            .graphicsLayer {
-                scaleY = scale
-                scaleX = 1f - (1f - scale) * 0.5f
-                alpha = if (enabled) 1f else 0.4f
-            }
-            .shadow(if (enabled) 5.dp else 0.dp, shape, ambientColor = p.accent, spotColor = p.accent)
-            .clip(shape)
-            .background(background)
-            .clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick),
+            .size(hit)
+            .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
-        content = content,
-    )
+    ) {
+        Box(
+            modifier = Modifier
+                .size(size)
+                .graphicsLayer {
+                    val s = scale.value
+                    scaleY = s
+                    scaleX = 1f - (1f - s) * 0.5f
+                    alpha = if (enabled) 1f else 0.4f
+                }
+                .shadow(if (enabled) 5.dp else 0.dp, shape, ambientColor = p.accent, spotColor = p.accent)
+                .clip(shape)
+                .background(background),
+            contentAlignment = Alignment.Center,
+            content = content,
+        )
+    }
 }
+
+/** 无障碍建议的最小点击区域 */
+val MinTouchTarget = 48.dp
 
 /** 通用的按压回弹 Modifier，用在卡片/贴纸上 */
 @Composable
-fun Modifier.bouncyClick(onClick: () -> Unit): Modifier {
+fun Modifier.bouncyClick(onClick: () -> Unit): Modifier = bouncy { clickableWith(it, Role.Button, onClick) }
+
+/** 开关行：和 [bouncyClick] 一样的回弹，但给读屏软件报"开关 / 已开启"，而不是普通按钮 */
+@Composable
+fun Modifier.bouncySwitch(checked: Boolean, onToggle: () -> Unit): Modifier =
+    bouncy { toggleableWith(it, checked, onToggle) }
+
+@Composable
+private fun Modifier.bouncy(attach: Modifier.(MutableInteractionSource) -> Modifier): Modifier {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(
+    val scale = animateFloatAsState(
         if (pressed) 0.9f else 1f, spring(dampingRatio = 0.35f, stiffness = 500f), label = "bounce",
     )
     return this
-        .graphicsLayer { scaleX = scale; scaleY = scale }
-        .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+        .graphicsLayer { scaleX = scale.value; scaleY = scale.value } // 只在绘制阶段读取动画值
+        .attach(interaction)
 }
+
+private fun Modifier.clickableWith(i: MutableInteractionSource, role: Role, onClick: () -> Unit) =
+    clickable(interactionSource = i, indication = null, role = role, onClick = onClick)
+
+private fun Modifier.toggleableWith(i: MutableInteractionSource, checked: Boolean, onToggle: () -> Unit) =
+    toggleable(value = checked, interactionSource = i, indication = null, role = Role.Switch, onValueChange = { onToggle() })
 
 /**
  * 有小兔子在上面蹦跶的加载进度条。

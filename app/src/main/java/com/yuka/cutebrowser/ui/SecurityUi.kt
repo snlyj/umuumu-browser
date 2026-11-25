@@ -178,7 +178,7 @@ fun PermissionDialog(prompt: PermissionPrompt) {
         ) {
             Text(prompt.perms.joinToString(" ") { it.emoji }, fontSize = 40.sp)
             Spacer(Modifier.height(8.dp))
-            Text(UrlUtils.host(prompt.origin).ifBlank { prompt.origin }, color = p.accent, fontSize = 15.sp, fontWeight = FontWeight.Bold,
+            Text(UrlUtils.host(prompt.origin).ifBlank { prompt.origin }, color = p.accentInk, fontSize = 15.sp, fontWeight = FontWeight.Bold,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 "想使用你的" + prompt.perms.joinToString("、") { it.label },
@@ -241,7 +241,7 @@ fun ShieldDialog(tab: TabState, controller: BrowserController, onDismiss: () -> 
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text("🛡️", fontSize = 40.sp)
-            Text(host, color = p.accent, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(host, color = p.accentInk, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(10.dp))
             InfoLine(if (tab.isSecure) "🔒" else "⚠️", if (tab.isSecure) "加密连接（https）" else "未加密连接（http），别在这里输入密码哦")
             InfoLine("🧹", if (controller.adBlockEnabled && siteOn) "本页拦下了 ${tab.blockedCount} 个广告/追踪请求" else "这个网站没有开启拦截")
@@ -437,7 +437,7 @@ fun SitePermsSheet(repo: CuteRepository, controller: BrowserController) {
                     Modifier.clip(RoundedCornerShape(50)).background(p.pink)
                         .bouncyClick { scope.launch { repo.clearSitePerms() }; controller.sitePerms = emptyList() }
                         .padding(horizontal = 14.dp, vertical = 8.dp),
-                ) { Text("全部重置", color = p.accent, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+                ) { Text("全部重置", color = p.accentInk, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
             }
         }
         Text("网站每次想用位置、相机、麦克风时都会先问你，默认不给。这里是你让兔兔记住的选择。",
