@@ -345,3 +345,35 @@ The menu item 「隐身标签」 and the original onIncognito handler always cal
 
 ### Not runtime-verified
 The toggle was not re-tested on a phone. Logic is covered by unit tests and Robolectric screenshots of the new labels/chip. Existing v1.6 limitations still apply (no emulator smoke test of incognito profile isolation, etc.).
+
+## v1.6.2 — DoH 测速闪退、安全页被滑关掉、西雅图时区 (versionCode 9)
+
+User report (pt9u) after testing the v1.6.1 release APK on a real phone:
+1. 加密 DNS 里点「测速」会闪退
+2. 设置 → 安全页面滑动时，设置会自己关掉，只能重新打开
+3. 用西雅图代理，希望加西雅图时区
+
+### Issue 1 — 测速闪退
+**Most likely cause (not reproduced on a device in this environment):** `DohManager.test()` already ran on `Dispatchers.IO`, but it only caught `Exception`. An `Error` (typically `ExceptionInInitializerError` / `NoSuchMethodError` if R8 full mode stripped okhttp/okio Kotlin extensions such as `toHttpUrl` / `toByteString`) would escape the coroutine. DoH is off by default, so OkHttp may first load when the user taps 测速 — which matches a release-APK-only crash. The UI `scope.launch` also had no `try/finally` or timeout, so an uncaught `Throwable` could crash the process (Android's default handler) and leave the button stuck.
+
+**Fix:** `test()` still runs on IO, now with a 10s `withTimeout`, catches `Throwable` per provider (rethrowing real `CancellationException`), and always returns a `DohTestResult` (timeout / error text included). The UI wraps each provider in `try/finally` and shows the error line. R8 keep rules for `okhttp3.**` and `okio.**`. New `DohSpeedTest` (exception, `Error`, timeout, bad URL, fake success, per-provider isolation).
+
+Also: `DohManager.awaitInitial()` now times out on `Dispatchers.IO` (wall clock). On a frozen Compose test clock, `withTimeout` on Main never fired, so `sessionReady` could stay false and the UI would never leave the splash.
+
+### Issue 2 — 安全页滑动时设置自己关掉
+**Most likely cause (classic Material3 behavior; no device replay):** 「安全与隐私」is a long `verticalScroll` inside the same `ModalBottomSheet` as Settings. The sheet's default nested-scroll connection treats leftover downward fling at the top of the list as swipe-to-dismiss, so scrolling around can hide the sheet. Less likely: a security toggle accidentally hit while scrolling (Activity recreation is already suppressed by the broad v1.6 `configChanges`), or `remember { sheet }` resetting on an unexpected recreation. Predictive back / a bare `BackHandler` outside the dialog was also a problem after the swipe veto: M3 `animateToDismiss` checks `confirmValueChange(Hidden)` first, so vetoing swipe also swallowed the system back key unless the handler is registered inside the sheet dialog.
+
+**Fix:** Settings / Security / site-permission sheets veto `SheetValue.Hidden` (swipe and leftover fling cannot close them; the confirm lambda is `remember`ed so `SheetState` is not recreated every composition). An explicit close (×) button was added. System back (and the close button) still work: `BackHandler` lives inside the `ModalBottomSheet` content; Security back returns to Settings, site-permissions back returns to Security, Settings back closes. `sheet` in `BrowserScreen` is `rememberSaveable`. Covered by `SheetDismissTest`.
+
+### Issue 3 — 西雅图时区
+`America/Los_Angeles` was already in the curated list, labelled only 「洛杉矶（美国西部）」. It is now 「西雅图 / Seattle / 洛杉矶（美国西部）」 (same IANA id — Seattle and Los Angeles share Pacific Time). Search matches 西雅图 / Seattle / 洛杉矶. Added 「丹佛（美国山地）」 (`America/Denver`); New York and Chicago were already present. Language list already includes `en-US`. The western-US preset is labelled 「美国西部：西雅图 + English」. Offset labels use `java.time.ZoneId` / `ZoneOffset` (IANA tz database, including DST); JS/Intl already received the IANA id. `TzLangTest` asserts LA/Seattle DST (Jan UTC-8, Jul UTC-7) and the new search terms.
+
+### Tests / artifacts
+- New `DohSpeedTest` (6 cases) and `SheetDismissTest` (2 cases). `TzLangTest` extended.
+- Screenshot tests: close button on Settings / Security headers (`03_settings.png`, `11_security.png`, etc.). `waitForBrowser()` no longer calls `fetchSemanticsNodes` with `autoAdvance` on (that waits for idle and hangs 60s on the home bunny's infinite animation).
+- `./gradlew testDebugUnitTest`: 23 suites, 101 tests, 2 skipped (DohLiveTest), 0 failures. A subsequent `-Proborazzi.test.record=true` full-suite run can still flake `waitForBrowser` under load; screenshots were re-recorded from an isolated screenshot-test run, which passed.
+- `fp-js/chrome-test.mjs`: ALL PASS. `fp-js/chrome-locale-test.mjs`: 89 checks passed, 0 failed (desktop Chrome, not WebView).
+- Release APK signed CN=UmuUmu, versionCode 9 / 1.6.2: 3,322,614 B (v1.6.1 3,158,710 — larger mainly because okhttp/okio are now fully kept for the release speed-test path). Debug 13,068,277 B.
+
+### Not runtime-verified
+The three phone-reported issues were not re-tested on a device or emulator (this box still cannot smoke-test a phone/AVD reliably). Speed-test crash-proofing and settings dismiss policy are covered by unit tests; Seattle DST/search by `TzLangTest`. Whether leftover-fling dismiss is gone, and whether 测速 stays up on the user's release APK, needs a phone check.

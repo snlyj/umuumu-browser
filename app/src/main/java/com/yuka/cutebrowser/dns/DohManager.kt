@@ -126,7 +126,11 @@ object DohManager {
      * 第一个网页加载之前调用：开着加密 DNS 时，要等代理设置生效，避免第一批请求走系统 DNS。
      * 关着时只是等一次设置读取（几毫秒，和其它设置并行）。
      */
-    suspend fun awaitInitial(timeoutMs: Long = 1500) { withTimeoutOrNull(timeoutMs) { initial.await() } }
+    suspend fun awaitInitial(timeoutMs: Long = 1500) {
+        // 超时必须走真实时钟：测试里 Compose 把主线程时钟停住时，withTimeout 在 Main 上永远不会到点，
+        // sessionReady 也就一直不置位，设置页测速/截图会卡在启动画面。
+        withContext(Dispatchers.IO) { withTimeoutOrNull(timeoutMs) { initial.await() } }
+    }
 
     private suspend fun apply(p: DohPrefs) {
         if (!p.enabled) { disable(); _status.value = DohStatus(); return }

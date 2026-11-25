@@ -15,8 +15,8 @@ android {
         applicationId = "com.yuka.cutebrowser"
         minSdk = 24
         targetSdk = 35
-        versionCode = 8
-        versionName = "1.6.1"
+        versionCode = 9
+        versionName = "1.6.2"
         resourceConfigurations += listOf("zh", "en")
     }
 

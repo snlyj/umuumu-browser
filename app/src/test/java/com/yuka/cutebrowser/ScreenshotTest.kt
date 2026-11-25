@@ -49,21 +49,20 @@ class ScreenshotTest {
     val rule = createAndroidComposeRule<MainActivity>()
 
     private fun waitForBrowser() {
-        // 主题和会话是异步读的。完整套件更慢，若一上来就把时钟停掉，主线程协程被冻住，界面会一直是空白底色。
-        // 不能用 waitUntil/waitForIdle：主页小兔子的耳朵是无限动画，autoAdvance 开着时永远等不到空闲。
-        rule.mainClock.autoAdvance = true
-        val deadline = System.currentTimeMillis() + 20_000
+        // 完整套件更慢（DataStore / IO 可能要好几秒）。时钟必须停着：fetchSemanticsNodes
+        // 会 waitForIdle，autoAdvance 开着时会被主页兔子的无限动画空等 60s。
+        // 主线程已排队的 DataStore 回调靠 idleMainLooper 推进。
+        rule.mainClock.autoAdvance = false
+        val deadline = System.currentTimeMillis() + 15_000
         while (System.currentTimeMillis() < deadline) {
             Thread.sleep(50)
-            org.robolectric.shadows.ShadowLooper.idleMainLooper()
-            rule.mainClock.advanceTimeBy(200)
+            runCatching { org.robolectric.shadows.ShadowLooper.idleMainLooper() }
+            rule.mainClock.advanceTimeBy(250)
             if (runCatching { rule.onAllNodesWithContentDescription("菜单").fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false)) {
-                rule.mainClock.autoAdvance = false
                 return
             }
         }
-        rule.mainClock.autoAdvance = false
-        throw AssertionError("waitForBrowser: 20s 内没有等到「菜单」，主页可能一直停在启动底色")
+        throw AssertionError("waitForBrowser: 没有等到「菜单」，主页可能一直停在启动底色")
     }
 
     private fun settle() {
