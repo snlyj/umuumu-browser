@@ -145,7 +145,12 @@ object DohManager {
         px.resolver = r
         val port = withContext(Dispatchers.IO) { px.start() }
         if (!overrideSet || _status.value.port != port) {
-            val cfg = ProxyConfig.Builder().addProxyRule("127.0.0.1:$port").build()
+            val cfg = ProxyConfig.Builder().addProxyRule("127.0.0.1:$port")
+                // 局域网里的名字（路由器、打印机、NAS：不带点的 "router"、*.local……）公共 DoH 查不到，走代理只会得到 NXDOMAIN（开了加密 DNS 就打不开家里的设备）。
+                // 这些名字本来就不属于公网，直接交给系统解析；IP 写法的地址本来就不需要 DNS。
+                .bypassSimpleHostnames()
+                .addBypassRule("*.local").addBypassRule("*.lan").addBypassRule("*.home.arpa")
+                .build()
             withTimeoutOrNull(2000) {
                 suspendCancellableCoroutine { c -> ProxyController.getInstance().setProxyOverride(cfg, direct) { if (c.isActive) c.resume(Unit) } }
             }
