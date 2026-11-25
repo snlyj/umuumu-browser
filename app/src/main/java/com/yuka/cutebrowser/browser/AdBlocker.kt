@@ -38,6 +38,9 @@ object AdBlocker {
         "union.baidu.com", "ads.csdn.net",
     )
 
+    /** 完整的规则表有十万条以上；低于这个数说明编译时有名单没读进来 */
+    private const val MIN_COMPLETE_RULES = 50_000
+
     private val ASSETS = listOf("filters/easylist.txt", "filters/easyprivacy.txt")
 
     @Volatile var engine: FilterEngine? = null
@@ -75,9 +78,11 @@ object AdBlocker {
             }
             e.addHosts(hosts)
             e.finish()
-            // 旧版本缓存删掉，写新的（先写临时文件再改名，防止写一半）
-            dir.listFiles()?.forEach { if (it.name != cache.name) it.delete() }
-            runCatching {
+            // 旧版本缓存删掉，写新的（先写临时文件再改名，防止写一半）。
+            // 规则明显不全（比如 assets 读失败）时不写缓存：否则这个残缺的引擎会被缓存到下次更新 App 为止
+            val complete = e.networkRuleCount > MIN_COMPLETE_RULES
+            dir.listFiles()?.forEach { if (it.name != cache.name || !complete) it.delete() }
+            if (complete) runCatching {
                 val tmp = File(dir, cache.name + ".tmp")
                 DataOutputStream(BufferedOutputStream(tmp.outputStream(), 1 shl 16)).use { e.writeTo(it) }
                 tmp.renameTo(cache)
@@ -97,15 +102,20 @@ object AdBlocker {
     /** 子资源请求要不要拦（任意线程）。url 原样传入即可 */
     fun shouldBlock(url: String, host: String, pageHost: String?, accept: String?): Boolean {
         val e = engine ?: return isBlockedHost(host)
-        val lower = url.lowercase()
-        return e.shouldBlock(FilterRequest(lower, host.lowercase(), pageHost, ResType.infer(lower, accept)))
+        // shouldInterceptRequest 在 WebView 的后台线程里调用：这里抛异常会让整个 App 崩掉，所以任何意外都当"不拦"
+        return try {
+            val lower = url.lowercase()
+            e.shouldBlock(FilterRequest(lower, host.lowercase(), pageHost, ResType.infer(lower, accept)))
+        } catch (t: Throwable) {
+            false
+        }
     }
 
     /** 这个页面被 @@…$document 例外放行了吗 */
     fun pageAllowlisted(url: String, host: String): Boolean =
-        engine?.isPageAllowlisted(url.lowercase(), host.lowercase()) ?: false
+        runCatching { engine?.isPageAllowlisted(url.lowercase(), host.lowercase()) }.getOrNull() ?: false
 
-    fun cosmeticCss(url: String, host: String): String? = engine?.cosmeticCss(url.lowercase(), host.lowercase())
+    fun cosmeticCss(url: String, host: String): String? = runCatching { engine?.cosmeticCss(url.lowercase(), host.lowercase()) }.getOrNull()
 
     fun isBlockedHost(host: String?): Boolean {
         var h = host?.lowercase() ?: return false

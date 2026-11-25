@@ -24,7 +24,7 @@ object DnsMessage {
 
     class FormatException(msg: String) : IOException(msg)
 
-    class Record(val name: String, val type: Int, val ttl: Long, val address: InetAddress?, val soaMinimum: Long = -1)
+    class Record(val name: String, val type: Int, val ttl: Long, val address: InetAddress?, val soaMinimum: Long = -1, val target: String? = null)
 
     class Response(
         val id: Int,
@@ -35,8 +35,24 @@ object DnsMessage {
         val answers: List<Record>,
         val authority: List<Record>,
     ) {
-        /** 回答里对应类型的地址（CNAME 链上的最终地址；我们只问一个名字，所以收集同类型记录即可） */
-        fun addresses(type: Int): List<InetAddress> = answers.filter { it.type == type && it.address != null }.map { it.address!! }
+        /**
+         * 回答里对应类型的地址：只收"问的名字"沿 CNAME 链走到的名字上的地址（RFC 1034 §3.6.2）。
+         * 不在链上的 A/AAAA（服务器夹带的、别的域名的记录）一律忽略，免得一个有问题的服务器把别的域名的地址塞进缓存。
+         * 回答里没有问题区时（questionName == null）退回"收所有同类型记录"。
+         */
+        fun addresses(type: Int): List<InetAddress> {
+            val q = questionName ?: return answers.filter { it.type == type && it.address != null }.map { it.address!! }
+            val chain = HashSet<String>()
+            chain += q
+            // CNAME 记录在回答里可能是乱序的，反复扫直到没有新名字（链长上限防循环）
+            var grew = true
+            var rounds = 0
+            while (grew && rounds++ < 16) {
+                grew = false
+                for (r in answers) if (r.type == TYPE_CNAME && r.name in chain && r.target != null && chain.add(r.target)) grew = true
+            }
+            return answers.filter { it.type == type && it.address != null && it.name in chain }.map { it.address!! }
+        }
 
         /** 正向结果的 TTL：回答链（CNAME + 地址）里最小的 TTL */
         fun minTtl(type: Int): Long {
@@ -151,13 +167,15 @@ object DnsMessage {
             val start = pos
             var addr: InetAddress? = null
             var soaMin = -1L
+            var target: String? = null
             when (type) {
+                TYPE_CNAME -> target = try { name() } catch (e: FormatException) { null }
                 TYPE_A -> if (rdLen == 4) addr = InetAddress.getByAddress(n, b.copyOfRange(start, start + 4))
                 TYPE_AAAA -> if (rdLen == 16) addr = InetAddress.getByAddress(n, b.copyOfRange(start, start + 16))
                 TYPE_SOA -> { name(); name(); repeat(4) { u32() }; soaMin = u32() }
             }
             pos = start + rdLen
-            return Record(n, type, ttl, addr, soaMin)
+            return Record(n, type, ttl, addr, soaMin, target)
         }
     }
 }

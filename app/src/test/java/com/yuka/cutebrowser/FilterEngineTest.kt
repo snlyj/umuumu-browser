@@ -118,4 +118,94 @@ class FilterEngineTest {
         println("FILTER_STATS network=${e.networkRuleCount} cosmetic=${e.cosmeticRuleCount} compileMs=%.0f cacheBytes=${bos.size()} loadMs=%.0f perRequestUs=%.2f blocked=$blocked/$n".format(compileMs, loadMs, perReqUs))
         assertTrue("match too slow: $perReqUs µs", perReqUs < 20.0)
     }
+
+    @Test
+    fun hostAnchorDoesNotMatchLookalikes() {
+        val e = engine("||example.com^", "||ads.net/track^", "||1.2.3.4^")
+        assertTrue(e.shouldBlock(req("https://example.com/")))
+        assertTrue(e.shouldBlock(req("https://example.com:8443/x")))
+        assertTrue(e.shouldBlock(req("https://a.b.example.com/x")))
+        assertFalse(e.shouldBlock(req("https://example.com.evil.net/x")))
+        assertFalse(e.shouldBlock(req("https://notexample.com/x")))
+        assertFalse(e.shouldBlock(req("https://evil.net/?u=example.com")))
+        assertFalse(e.shouldBlock(req("https://evil.net/example.com/x")))
+        assertTrue(e.shouldBlock(req("https://ads.net/track?x=1")))
+        assertTrue(e.shouldBlock(req("https://cdn.ads.net/track")))
+        assertFalse(e.shouldBlock(req("https://badads.net/track")))
+        assertFalse(e.shouldBlock(req("https://ads.net/tracker")))
+        assertTrue(e.shouldBlock(req("http://1.2.3.4/x.js")))
+        assertFalse(e.shouldBlock(req("http://11.2.3.4/x.js")))
+    }
+
+    @Test
+    fun anchorsWildcardsAndQuery() {
+        val e = engine("|https://a.com/x|", "||b.com/*/ads/*.js", "&ad_type=", "/ads/*?id=", "swf|")
+        assertTrue(e.shouldBlock(req("https://a.com/x")))
+        assertFalse(e.shouldBlock(req("https://a.com/x/y")))
+        assertFalse(e.shouldBlock(req("http://a.com/x"))) // 起始锚点是 https://
+        assertFalse(e.shouldBlock(req("https://z.com/?u=https://a.com/x")))
+        assertTrue(e.shouldBlock(req("https://b.com/v1/ads/banner.js")))
+        assertTrue(e.shouldBlock(req("https://cdn.b.com/v1/ads/banner.js")))
+        assertFalse(e.shouldBlock(req("https://b.com/v1/ads/banner.css")))
+        assertTrue(e.shouldBlock(req("https://c.com/p?x=1&ad_type=2")))
+        assertFalse(e.shouldBlock(req("https://c.com/p?ad_type=2"))) // 规则以 & 开头：必须真有一个 &
+        assertTrue(e.shouldBlock(req("https://d.com/ads/foo/bar?id=7")))
+        assertTrue(e.shouldBlock(req("https://d.com/media/x.swf")))
+        assertFalse(e.shouldBlock(req("https://d.com/media/x.swf?x")))
+    }
+
+    @Test
+    fun partyAndDomainOptions() {
+        val e = engine(
+            "||t.com^\$third-party", "||u.com^\$first-party", "||v.com^\$~third-party",
+            "||w.com^\$domain=a.com", "@@||w.com^\$domain=sub.a.com", "||x.co.uk^\$3p",
+        )
+        assertTrue(e.shouldBlock(req("https://t.com/p", page = "z.org")))
+        assertFalse(e.shouldBlock(req("https://t.com/p", page = "t.com")))
+        assertFalse(e.shouldBlock(req("https://u.com/p", page = "z.org")))
+        assertTrue(e.shouldBlock(req("https://u.com/p", page = "m.u.com")))
+        assertTrue(e.shouldBlock(req("https://v.com/p", page = "v.com")))
+        assertFalse(e.shouldBlock(req("https://v.com/p", page = "z.org")))
+        assertTrue(e.shouldBlock(req("https://w.com/p", page = "a.com")))
+        assertTrue(e.shouldBlock(req("https://w.com/p", page = "x.a.com")))
+        assertFalse(e.shouldBlock(req("https://w.com/p", page = "sub.a.com")))
+        assertFalse(e.shouldBlock(req("https://w.com/p", page = "nota.com")))
+        // 二级后缀：a.x.co.uk 和 x.co.uk 是同一个网站，b.co.uk 不是
+        assertFalse(e.shouldBlock(req("https://x.co.uk/p", page = "shop.x.co.uk")))
+        assertTrue(e.shouldBlock(req("https://x.co.uk/p", page = "b.co.uk")))
+        // 没有页面（独立请求）：当作第三方
+        assertTrue(e.shouldBlock(req("https://t.com/p", page = null)))
+    }
+
+    @Test
+    fun hostingSuffixesAreDifferentSites() {
+        // 以前 foo.web.app / bar.web.app 都被当成 "web.app" 这一个网站
+        val e = engine("||t.com^\$third-party")
+        assertTrue(com.yuka.cutebrowser.filter.Domains.base("foo.web.app") != com.yuka.cutebrowser.filter.Domains.base("bar.web.app"))
+        assertEquals("a.co.th", com.yuka.cutebrowser.filter.Domains.base("www.a.co.th"))
+        assertEquals("example.com", com.yuka.cutebrowser.filter.Domains.base("www.example.com"))
+        assertNotNull(e)
+    }
+
+    @Test
+    fun typeOptionsWithUnknownTypeAreLenient() {
+        val e = engine("||img.only^\$image,~third-party", "||cdn.net^\$script,stylesheet", "||all.net^\$all")
+        assertTrue(e.shouldBlock(req("https://img.only/a.png", page = "img.only", type = ResType.IMAGE)))
+        assertFalse(e.shouldBlock(req("https://img.only/a.png", page = "z.org", type = ResType.IMAGE)))
+        assertTrue(e.shouldBlock(req("https://cdn.net/a.css", type = ResType.STYLESHEET)))
+        assertFalse(e.shouldBlock(req("https://cdn.net/a.png", type = ResType.IMAGE)))
+        assertTrue(e.shouldBlock(req("https://all.net/x", type = ResType.XHR)))
+    }
+
+    @Test
+    fun degenerateRulesAndUrlsDoNotThrow() {
+        val e = engine("*", "||", "|", "^", "**^**", "\$third-party", "@@", "##", "a##", "||x^\$", "||x^\$domain=", "/ads/*/*/*/*/*/*/*/*/z")
+        for (u in listOf("", "https://", "https://a", "https://a.b/", "x", "https://a.b/?" + "a".repeat(10_000), "https://a.b/" + "/ads".repeat(5000))) {
+            val host = u.substringAfter("://", "").substringBefore('/')
+            e.shouldBlock(FilterRequest(u, host, "p.com", ResType.UNKNOWN))
+            e.isPageAllowlisted(u, host)
+            e.cosmeticCss(u, host)
+        }
+        assertFalse(e.shouldBlock(req("https://anything.com/x")))
+    }
 }

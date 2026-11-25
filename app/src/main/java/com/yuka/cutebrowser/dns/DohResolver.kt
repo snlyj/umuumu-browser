@@ -63,14 +63,22 @@ class OkHttpDohTransport(private val provider: DohProvider) : DohTransport {
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("DoH HTTP ${resp.code}")
             val body = resp.body ?: throw IOException("DoH empty body")
-            if (body.contentLength() > 65535) throw IOException("DoH response too large")
-            return body.bytes()
+            if (body.contentLength() > MAX_RESPONSE) throw IOException("DoH response too large")
+            // 没有 Content-Length（HTTP/2 / 分块）时 contentLength 是 -1：不能直接 bytes()，否则恶意的自定义服务器能灌爆内存
+            val src = body.source()
+            src.request(MAX_RESPONSE + 1L)
+            if (src.buffer.size > MAX_RESPONSE) throw IOException("DoH response too large")
+            return src.readByteArray()
         }
     }
 
     fun close() {
         client.dispatcher.executorService.shutdown()
         client.connectionPool.evictAll()
+    }
+
+    companion object {
+        const val MAX_RESPONSE = 65535
     }
 }
 
@@ -112,7 +120,7 @@ class DohResolver(
     private val inflight = ConcurrentHashMap<String, CompletableFuture<R>>()
     private val threadN = AtomicInteger()
     private val executor: ExecutorService = ThreadPoolExecutor(0, 32, 30, TimeUnit.SECONDS, SynchronousQueue()) { r ->
-        Thread(null, r, "umu-doh-${threadN.incrementAndGet()}", 256 * 1024).apply { isDaemon = true }
+        Thread(null, r, "umu-doh-${threadN.incrementAndGet()}", 512L * 1024).apply { isDaemon = true } // 栈 512 KB：TLS 握手（OkHttp）比普通线程要得多
     }.apply { rejectedExecutionHandler = ThreadPoolExecutor.CallerRunsPolicy() }
 
     override fun resolve(host: String): List<InetAddress> {

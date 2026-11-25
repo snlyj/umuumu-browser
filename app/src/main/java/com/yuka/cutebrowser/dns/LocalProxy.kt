@@ -35,6 +35,8 @@ class LocalProxy(
     @Volatile var resolver: HostResolver,
     private val connectTimeoutMs: Long = 10_000,
     private val attemptDelayMs: Long = 250,
+    /** 只给单元测试用：允许域名解析到回环地址（测试里的"上游"就在 127.0.0.1） */
+    private val allowLoopbackTargets: Boolean = false,
 ) {
     private var server: ServerSocket? = null
     @Volatile var port: Int = 0
@@ -49,7 +51,7 @@ class LocalProxy(
 
     private val threadN = AtomicInteger()
     private val pool: ExecutorService = ThreadPoolExecutor(0, 256, 20, TimeUnit.SECONDS, SynchronousQueue()) { r ->
-        Thread(null, r, "umu-proxy-${threadN.incrementAndGet()}", 128 * 1024).apply { isDaemon = true }
+        Thread(null, r, "umu-proxy-${threadN.incrementAndGet()}", HANDLER_STACK).apply { isDaemon = true }
     }
 
     val isRunning: Boolean get() = server?.isClosed == false
@@ -75,7 +77,12 @@ class LocalProxy(
 
     private fun acceptLoop(ss: ServerSocket) {
         while (!ss.isClosed) {
-            val c = try { ss.accept() } catch (e: IOException) { if (ss.isClosed) return else continue }
+            val c = try { ss.accept() } catch (e: IOException) {
+                if (ss.isClosed) return
+                // 比如文件描述符用完了（EMFILE）：不要空转烧 CPU，歇一会儿再试
+                try { Thread.sleep(50) } catch (_: InterruptedException) { return }
+                continue
+            }
             totalConnections.incrementAndGet()
             try {
                 pool.execute { handle(c) }
@@ -87,10 +94,14 @@ class LocalProxy(
 
     private class Head(val bytes: ByteArray, val headerEnd: Int, val total: Int)
 
+    /** 目标不允许（指向本机 / 本代理自己）：回 403 */
+    private class ForbiddenTarget : IOException("forbidden target")
+
     private fun handle(client: Socket) {
         var upstream: Socket? = null
         try {
             client.tcpNoDelay = true
+            client.keepAlive = true // 长时间没有数据的隧道（对端已经消失）靠它让系统回收，不会永远占着转发线程
             client.soTimeout = 30_000 // 只限制"发请求头"这一步
             val head = readHead(client.getInputStream()) ?: return client.close()
             val text = String(head.bytes, 0, head.headerEnd, Charsets.ISO_8859_1)
@@ -112,10 +123,14 @@ class LocalProxy(
                 val target = parts[1]
                 if (!target.startsWith("http://", true)) return reply(client, 400, "Bad Request")
                 val rest = target.substring(7)
-                val slash = rest.indexOf('/').let { if (it < 0) rest.length else it }
-                val (host, port) = splitHostPort(rest.substring(0, slash), 80) ?: return reply(client, 400, "Bad Request")
+                // 主机部分到第一个 / ? # 为止；去掉 user:pass@（Chromium 不会发，但别把它当成主机名）
+                val slash = rest.indexOfFirst { it == '/' || it == '?' || it == '#' }.let { if (it < 0) rest.length else it }
+                val authority = rest.substring(0, slash).substringAfterLast('@')
+                val (host, port) = splitHostPort(authority, 80) ?: return reply(client, 400, "Bad Request")
                 if (isSelf(host, port)) return reply(client, 403, "Forbidden")
-                val path = rest.substring(slash).ifEmpty { "/" }
+                var path = rest.substring(slash)
+                if (path.isEmpty() || path[0] != '/') path = "/$path"
+                path = path.substringBefore('#')
                 val sb = StringBuilder(head.headerEnd + 32)
                 sb.append(method).append(' ').append(path).append(' ').append(parts[2]).append("\r\n")
                 for (i in 1 until lines.size) {
@@ -138,7 +153,10 @@ class LocalProxy(
             }
             client.soTimeout = 0
             relay(client, upstream)
-        } catch (e: Exception) {
+        } catch (e: ForbiddenTarget) {
+            runCatching { upstream?.close() }
+            reply(client, 403, "Forbidden")
+        } catch (e: Throwable) { // 含 StackOverflowError / OOM：别让线程悄悄死掉、把连接晾在那里
             errors.incrementAndGet()
             runCatching { client.close() }
             runCatching { upstream?.close() }
@@ -172,17 +190,35 @@ class LocalProxy(
         runCatching { client.close() }
     }
 
+    /** 文字上就看得出是连回自己（解析之后的检查在 [allowedTargets]，能挡住各种写法和域名绕弯） */
     private fun isSelf(host: String, port: Int): Boolean {
         if (port != this.port) return false
         val h = host.lowercase()
-        return h == "localhost" || h.startsWith("127.") || h == "::1" || h == "0.0.0.0"
+        return h == "localhost" || h.endsWith(".localhost") || h.startsWith("127.") || h == "::1" || h == "0.0.0.0"
     }
 
-    /** 解析 + 连接；失败返回 null（让 WebView 显示代理/隧道错误页） */
+    /**
+     * 解析 + 连接；失败返回 null（让 WebView 显示代理/隧道错误页）；目标不允许时抛 [ForbiddenTarget]。
+     */
     private fun open(host: String, port: Int): Socket? {
         val addrs = try { resolver.resolve(host) } catch (e: UnknownHostException) { return null } catch (e: Exception) { return null }
         if (addrs.isEmpty()) return null
-        return connectHappyEyeballs(order(addrs), port)?.also { it.tcpNoDelay = true }
+        val ok = allowedTargets(host, port, addrs)
+        if (ok.isEmpty()) throw ForbiddenTarget()
+        return connectHappyEyeballs(order(ok), port)?.also { it.tcpNoDelay = true }
+    }
+
+    /**
+     * 代理不能变成"打到本机的跳板"：
+     *  - 域名解析出回环 / 0.0.0.0 / 链路本地（169.254、fe80）/ 组播地址 → 丢掉这些地址（DNS 重绑定：公网域名指向 127.0.0.1，
+     *    用代理后 Chromium 看不到真实 IP，没法再按"私有网络访问"拦；内网 192.168.x / 10.x 的域名照常放行，家庭服务器常这么用）；
+     *  - 用户直接写 IP 的：只拦"连回本代理自己"，其它照旧（那是用户自己的选择）。
+     */
+    internal fun allowedTargets(host: String, port: Int, addrs: List<InetAddress>): List<InetAddress> {
+        if (allowLoopbackTargets) return addrs
+        val literal = IpLiteral.parse(host.trim('[', ']')) != null
+        if (literal) return if (port == this.port && addrs.any { it.isLoopbackAddress || it.isAnyLocalAddress }) emptyList() else addrs
+        return addrs.filterNot { it.isLoopbackAddress || it.isAnyLocalAddress || it.isLinkLocalAddress || it.isMulticastAddress }
     }
 
     private fun order(addrs: List<InetAddress>): List<InetAddress> {
@@ -305,6 +341,12 @@ class LocalProxy(
     }
 
     companion object {
+        /**
+         * 转发/握手线程的栈。128 KB 太小：第一次在这种线程里加载类（Kotlin 标准库、Selector……）时 JVM 上会 StackOverflowError，
+         * 线程悄悄死掉、连接挂住（单元测试里就出现过，时有时无）；ART 上 TLS 之外的代码也没有这么大余量。栈是按需分配的，512 KB 几乎不占实际内存。
+         */
+        const val HANDLER_STACK = 512L * 1024
+
         /** "host:port" / "[v6]:port" / "host" */
         fun splitHostPort(s: String, defPort: Int): Pair<String, Int>? {
             if (s.isEmpty()) return null

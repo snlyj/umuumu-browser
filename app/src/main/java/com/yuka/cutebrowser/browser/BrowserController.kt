@@ -188,8 +188,9 @@ class BrowserController(
     private var nextId = 1L
     private var pendingDownload: PendingDownload? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
-    private val pendingBlobs = HashMap<String, Pair<PendingDownload, String?>>()
-    private val pendingBlobTimes = HashMap<String, Long>()
+    /** 等网页把 blob 内容交回来的下载：token -> (下载, 发起时的页面来源, 发起时间) */
+    private class PendingBlob(val p: PendingDownload, val origin: String?, val at: Long)
+    private val pendingBlobs = HashMap<String, PendingBlob>()
     private val blobBridge = BlobBridge { json, origin -> activity.runOnUiThread { onBlobMessage(json, origin) } }
 
     /** 空闲时预热好的一个 WebView，第一次打开网页时直接拿来用 */
@@ -219,6 +220,8 @@ class BrowserController(
         if (old == new && !localeChanged) return
         if (old.blockThirdPartyCookies != new.blockThirdPartyCookies) {
             tabs.forEach { t -> t.webView?.let { cookieManagerFor(t).setAcceptThirdPartyCookies(it, !new.blockThirdPartyCookies) } }
+            // 预热的备用 WebView（普通 profile）也要改：它以后会被拿去当新标签，不能还带着旧的第三方 Cookie 设置
+            spare?.let { CookieManager.getInstance().setAcceptThirdPartyCookies(it, !new.blockThirdPartyCookies) }
         }
         if (old.genericUa != new.genericUa || old.webrtcProtect != new.webrtcProtect || old.dntGpc != new.dntGpc || old.autofill != new.autofill) {
             rebuildWebViews()
@@ -540,6 +543,8 @@ class BrowserController(
     fun open(url: String) = load(current, url)
 
     private fun load(tab: TabState, raw: String) {
+        // 最后一道关：javascript: / file: / content: 等不是"网页"，不让它进 WebView（外部 App 的 VIEW 意图、旧书签都会走到这里）
+        if (!UrlUtils.isLoadable(raw)) { toast("这个地址打不开呢 🥺"); return }
         val up = upgradeFor(tab, raw)
         tab.upgradedFrom = if (up != null) raw else null
         val url = up ?: raw
@@ -669,7 +674,7 @@ class BrowserController(
     fun destroyAll() {
         // Activity 要销毁了：别让 WebView / 文件选择回调 / 权限弹窗继续指着它
         fileCallback?.onReceiveValue(null); fileCallback = null
-        pendingBlobs.clear(); pendingBlobTimes.clear(); pendingDownload = null; permissionPrompt = null
+        pendingBlobs.clear(); pendingDownload = null; permissionPrompt = null
         tabs.forEach { t -> t.webView?.let { disposeWebView(it) }; t.webView = null }
         spare?.let { disposeWebView(it) }; spare = null
         incognitoProfile?.let { name -> incognitoProfile = null; main.post { WebHardening.deleteProfile(name) } }
@@ -678,7 +683,7 @@ class BrowserController(
     /** "退出时清除数据"：Cookie、网站存储、缓存、历史、打开的标签（收藏保留） */
     @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
     fun clearAllDataOnExit(done: () -> Unit) {
-        tabs.firstNotNullOfOrNull { it.webView }?.clearCache(true)
+        (tabs.firstNotNullOfOrNull { it.webView } ?: spare)?.clearCache(true) // 没有标签的 WebView 时用备用的清（缓存只能通过某个 WebView 实例清）
         WebStorage.getInstance().deleteAllData()
         val ctx = activity.applicationContext
         val r = repo
@@ -865,6 +870,7 @@ class BrowserController(
                 }
                 tab.loading = true
                 tab.cosmeticFor = null
+                if (pendingBlobs.isNotEmpty()) purgeBlobs(view) // 页面跳走了：这页发起的 blob 下载作废
                 if (url != null) {
                     tab.url = url
                     Uri.parse(url).host?.let { tab.pageHost = it.lowercase() }
@@ -1011,7 +1017,8 @@ class BrowserController(
         if (map.isEmpty()) { request.deny(); return }
         askSitePermission(tab, request.origin.toString(), map.keys.toList()) { granted ->
             val res = granted.mapNotNull { map[it] }.toTypedArray()
-            if (res.isEmpty()) request.deny() else request.grant(res)
+            // 用户点"允许"之前网页可能已经跳走 / 撤回了请求：这时 grant/deny 会抛异常，别让 App 崩
+            runCatching { if (res.isEmpty()) request.deny() else request.grant(res) }
         }
     }
 
@@ -1071,18 +1078,29 @@ class BrowserController(
 
     private fun has(p: String) = ContextCompat.checkSelfPermission(activity, p) == PackageManager.PERMISSION_GRANTED
 
+    /** 网页点链接唤起别的 App。参考 Chrome 的做法把 intent: 里网页能控制的东西都清掉，免得网页借它做别的事 */
     private fun openExternal(url: String, view: WebView) {
         try {
-            val intent = if (url.startsWith("intent:")) Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
+            val intent = if (url.startsWith("intent:", ignoreCase = true)) Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
             else Intent(Intent.ACTION_VIEW, Uri.parse(url))
             intent.addCategory(Intent.CATEGORY_BROWSABLE)
             intent.component = null
             intent.selector = null
+            // intent: 能带 launchFlags：清掉（尤其是 URI 读写授权，网页不该有这个权力），也不让它指向我们自己
+            intent.flags = 0
+            intent.clipData = null
+            if (intent.`package` == activity.packageName) { toast("这个链接打不开呢 🥺"); return }
+            when (intent.data?.scheme?.lowercase()) {
+                "file", "content", "javascript", "android-app" -> { toast("这个链接打不开呢 🥺"); return }
+            }
             try {
                 activity.startActivity(intent)
             } catch (e: ActivityNotFoundException) {
+                // browser_fallback_url 只认 http(s)：`javascript:` 之类会在当前页面里执行（子框架里的链接就能打到顶层页面）
                 val fallback = intent.getStringExtra("browser_fallback_url")
-                if (!fallback.isNullOrBlank() && UrlUtils.isWebUrl(fallback)) view.loadUrl(fallback) else toast("没有找到能打开它的 App 哦")
+                val tab = view.tag as? TabState
+                if (UrlUtils.isWebUrl(fallback) && tab != null) load(tab, fallback!!) // 走 load：HTTPS 升级照常
+                else toast("没有找到能打开它的 App 哦")
             }
         } catch (e: Exception) {
             toast("这个链接打不开呢 🥺")
@@ -1113,11 +1131,13 @@ class BrowserController(
 
     private fun startHttpDownload(p: PendingDownload) {
         try {
-            val fileName = Downloads.fileName(p.url, p.contentDisposition, p.mimeType)
-            val req = DownloadManager.Request(Uri.parse(p.url)).apply {
+            // 只走 HTTPS 开着时：明文下载地址同样升级（DownloadManager 不经过 WebView 的拦截）
+            val url = (p.view?.tag as? TabState)?.let { upgradeFor(it, p.url) } ?: p.url
+            val fileName = Downloads.fileName(url, p.contentDisposition, p.mimeType)
+            val req = DownloadManager.Request(Uri.parse(url)).apply {
                 p.mimeType?.let { setMimeType(it) }
                 p.userAgent?.let { addRequestHeader("User-Agent", it) }
-                cookieManagerFor(p.view?.tag as? TabState).getCookie(p.url)?.let { addRequestHeader("Cookie", it) }
+                cookieManagerFor(p.view?.tag as? TabState).getCookie(url)?.let { addRequestHeader("Cookie", it) }
                 setTitle(fileName)
                 setDescription("唔姆唔姆正在努力下载中～")
                 setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
@@ -1143,28 +1163,36 @@ class BrowserController(
     /** blob: 只存在于网页内存里，让网页自己 fetch 出来转成 base64 再通过一次性 token 交给我们 */
     private fun startBlobDownload(p: PendingDownload) {
         val view = p.view ?: run { toast("下载失败了 🥺"); return }
-        // 网页跳走/关掉后桥永远收不到回复：超过 60 秒的请求直接丢掉，免得把 3 个名额占满、之后再也下载不了 blob
-        val now = SystemClock.uptimeMillis()
-        pendingBlobTimes.entries.removeAll { (t, at) -> (now - at > BLOB_TIMEOUT_MS).also { if (it) pendingBlobs.remove(t) } }
+        purgeBlobs(null)
         if (pendingBlobs.size >= 3) { toast("前面的文件还在准备中，稍等一下哦"); return }
         val token = UUID.randomUUID().toString()
-        pendingBlobs[token] = p to originOf(view.url)
-        pendingBlobTimes[token] = now
+        pendingBlobs[token] = PendingBlob(p, originOf(view.url), SystemClock.elapsedRealtime())
         toast("正在准备文件… 🎀")
         view.evaluateJavascript(BlobBridge.script(token, p.url, Downloads.MAX_BLOB_BYTES), null)
+    }
+
+    /**
+     * 清掉过期（网页一直没回应 / fetch 卡住）和作废（发起下载的页面已经跳走）的 blob 请求。
+     * 以前它们永远占着"最多 3 个"的名额：卡三次之后 blob 下载就一直报"前面的文件还在准备中"，直到重启 App。
+     */
+    private fun purgeBlobs(leaving: WebView?) {
+        val now = SystemClock.elapsedRealtime()
+        pendingBlobs.entries.removeAll { (_, e) -> now - e.at > BLOB_TIMEOUT_MS || (leaving != null && e.p.view === leaving) }
     }
 
     private fun originOf(url: String?): String? = UrlUtils.originOf(url)
 
     private fun onBlobMessage(json: String, origin: String?) {
+        // 先看大小再解析：网页（旧 WebView 的 JS 接口所有框架都能调）可以随便塞一个巨大的字符串过来，解析它会把内存撑爆
+        if (json.length > Downloads.MAX_BLOB_JSON_CHARS) return
         val o = runCatching { org.json.JSONObject(json) }.getOrNull() ?: return
         val token = o.optString("t")
         val entry = pendingBlobs[token] ?: return // 不是我们发起的，忽略
+        if (SystemClock.elapsedRealtime() - entry.at > BLOB_TIMEOUT_MS) { pendingBlobs.remove(token); return }
         // 能拿到来源时再核对一次：必须是发起下载的那个网站
-        if (origin != null && entry.second != null && originOf(origin) != entry.second) return
+        if (origin != null && entry.origin != null && originOf(origin) != entry.origin) return
         pendingBlobs.remove(token)
-        pendingBlobTimes.remove(token)
-        val p = entry.first
+        val p = entry.p
         val dataUrl = o.optString("d").takeIf { it.isNotEmpty() }
         val mime = o.optString("m")
         val error = o.optString("e")
@@ -1175,6 +1203,7 @@ class BrowserController(
         activity.lifecycleScope.launch {
             val decoded = kotlinx.coroutines.withContext(Dispatchers.Default) { Downloads.decodeDataUrl(dataUrl) }
             if (decoded == null) { toast("这个文件解析不了呢 🥺"); return@launch }
+            if (decoded.second.size > Downloads.MAX_BLOB_BYTES) { toast("文件太大啦（超过 50MB）🥺"); return@launch }
             val type = p.mimeType?.takeIf { it.isNotBlank() } ?: mime.takeIf { it.isNotBlank() } ?: decoded.first
             saveAndToast(Downloads.fileName(p.url, p.contentDisposition, type), type, decoded.second)
         }

@@ -72,6 +72,7 @@ try {
   check('screen bucketed', /^\d+x\d+ avail \d+x\d+ depth 24$/.test(a1.screen), a1.screen + ' (real ' + base.screen + ')');
   check('dpr bucketed', a1.dpr * 2 === Math.round(a1.dpr * 2), String(a1.dpr));
   check('toString looks native', a1.toStringNative === 'true,true,true,true', a1.toStringText);
+  check('toString has no extra (symbol) keys, key not leaked', a1.toStringKeys === base.toStringKeys && !a1.toStringKeys.includes('aaaa1111'), a1.toStringKeys);
   check('function name/length/no prototype', a1.fnName === base.fnName, a1.fnName);
   check('gamepads 4 nulls', a1.gamepads === '[null,null,null,null]');
   check('usb/bluetooth/hid/serial/keyboard hidden', !a1.usb && !a1.bluetooth && !a1.hid && !a1.serial && !a1.keyboard);
