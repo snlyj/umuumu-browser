@@ -54,7 +54,8 @@ object UrlUtils {
     fun isWebUrl(url: String?): Boolean {
         val u = url?.trim() ?: return false
         if (!(u.startsWith("http://", true) || u.startsWith("https://", true))) return false
-        return runCatching { !Uri.parse(u).host.isNullOrBlank() }.getOrDefault(false)
+        // 用和 HTTPS 升级同一套主机名解析（纯 Kotlin，不依赖 android.net.Uri，单元测试也能跑；反斜杠/@ 的写法也按 Chromium 的理解处理）
+        return com.yuka.cutebrowser.security.HttpsUpgrade.hostOf(u).isNotBlank()
     }
 
     fun host(url: String): String = runCatching { Uri.parse(url).host }.getOrNull()?.removePrefix("www.") ?: url
