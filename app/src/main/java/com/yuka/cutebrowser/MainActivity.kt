@@ -33,6 +33,7 @@ import androidx.lifecycle.lifecycleScope
 import com.yuka.cutebrowser.browser.AdBlocker
 import com.yuka.cutebrowser.browser.BrowserController
 import com.yuka.cutebrowser.browser.SessionStore
+import com.yuka.cutebrowser.browser.UrlUtils
 import com.yuka.cutebrowser.data.CuteRepository
 import com.yuka.cutebrowser.dns.DohManager
 import com.yuka.cutebrowser.data.SecurityPrefs
@@ -262,7 +263,8 @@ class MainActivity : FragmentActivity(), AppProtection {
     private fun handleIntent(intent: Intent?, initial: Boolean) {
         intent ?: return
         when (intent.action) {
-            Intent.ACTION_VIEW -> intent.dataString?.let { url ->
+            // MainActivity 是 exported 的：别的 App 可以用显式 Intent 塞任何地址进来（javascript:、file:、content:……）。只收网页链接
+            Intent.ACTION_VIEW -> intent.dataString?.takeIf { UrlUtils.isWebUrl(it) }?.let { url ->
                 if (initial) controller.open(url) else controller.newTab(url)
             }
             Intent.ACTION_WEB_SEARCH -> intent.getStringExtra(SearchManager.QUERY)?.let { q ->

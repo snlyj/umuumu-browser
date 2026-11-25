@@ -22,6 +22,31 @@ class SecurityUtilsTest {
     }
 
     @Test
+    fun localExemptionIsNotFooledByLookalikeHosts() {
+        // 以前 startsWith("127.") 会把 127.evil.com 当成本机，http 不升级（HTTPS-only 被绕过）
+        assertEquals("https://127.0.0.1.evil.com/", HttpsUpgrade.upgrade("http://127.0.0.1.evil.com/", emptySet()))
+        assertEquals("https://127.evil.com/", HttpsUpgrade.upgrade("http://127.evil.com/", emptySet()))
+        assertEquals("https://localhost.evil.com/", HttpsUpgrade.upgrade("http://localhost.evil.com/", emptySet()))
+        assertNull(HttpsUpgrade.upgrade("http://127.0.0.1:8080/x", emptySet()))
+        assertNull(HttpsUpgrade.upgrade("http://127.1.2.3/", emptySet()))
+        assertNull(HttpsUpgrade.upgrade("http://dev.localhost/", emptySet()))
+        assertNull(HttpsUpgrade.upgrade("http://localhost./", emptySet()))
+        assertNull(HttpsUpgrade.upgrade("http://[::1]:3000/", emptySet()))
+        assertEquals("https://127.0.0.256/", HttpsUpgrade.upgrade("http://127.0.0.256/", emptySet()))
+    }
+
+    @Test
+    fun hostOfFollowsBrowserParsing() {
+        // `\` 在浏览器里等于 `/`：这个地址实际连的是 evil.com，不是 localhost
+        assertEquals("evil.com", HttpsUpgrade.hostOf("http://evil.com\\@localhost/"))
+        assertEquals("https://evil.com\\@localhost/", HttpsUpgrade.upgrade("http://evil.com\\@localhost/", emptySet()))
+        assertEquals("evil.com", HttpsUpgrade.hostOf("http://evil.com/@localhost"))
+        assertEquals("evil.com", HttpsUpgrade.hostOf("http://ev\til.com/"))
+        assertEquals("[::1]", HttpsUpgrade.hostOf("http://[::1]:8080/a"))
+        assertEquals("a.com", HttpsUpgrade.hostOf("http://u:p@A.com:81?x#y"))
+    }
+
+    @Test
     fun genericUa() {
         val wv = "Mozilla/5.0 (Linux; Android 14; Pixel 7 Build/UQ1A.240205.004; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.6778.135 Mobile Safari/537.36"
         assertEquals(

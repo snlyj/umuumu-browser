@@ -470,6 +470,8 @@ class BrowserController(
     fun open(url: String) = load(current, url)
 
     private fun load(tab: TabState, raw: String) {
+        // 最后一道关：javascript: / file: / content: 等不是"网页"，不让它进 WebView（外部 App 的 VIEW 意图、旧书签都会走到这里）
+        if (!UrlUtils.isLoadable(raw)) { toast("这个地址打不开呢 🥺"); return }
         val up = upgradeFor(tab, raw)
         tab.upgradedFrom = if (up != null) raw else null
         val url = up ?: raw
@@ -985,18 +987,29 @@ class BrowserController(
 
     private fun has(p: String) = ContextCompat.checkSelfPermission(activity, p) == PackageManager.PERMISSION_GRANTED
 
+    /** 网页点链接唤起别的 App。参考 Chrome 的做法把 intent: 里网页能控制的东西都清掉，免得网页借它做别的事 */
     private fun openExternal(url: String, view: WebView) {
         try {
-            val intent = if (url.startsWith("intent:")) Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
+            val intent = if (url.startsWith("intent:", ignoreCase = true)) Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
             else Intent(Intent.ACTION_VIEW, Uri.parse(url))
             intent.addCategory(Intent.CATEGORY_BROWSABLE)
             intent.component = null
             intent.selector = null
+            // intent: 能带 launchFlags：清掉（尤其是 URI 读写授权，网页不该有这个权力），也不让它指向我们自己
+            intent.flags = 0
+            intent.clipData = null
+            if (intent.`package` == activity.packageName) { toast("这个链接打不开呢 🥺"); return }
+            when (intent.data?.scheme?.lowercase()) {
+                "file", "content", "javascript", "android-app" -> { toast("这个链接打不开呢 🥺"); return }
+            }
             try {
                 activity.startActivity(intent)
             } catch (e: ActivityNotFoundException) {
+                // browser_fallback_url 只认 http(s)：`javascript:` 之类会在当前页面里执行（子框架里的链接就能打到顶层页面）
                 val fallback = intent.getStringExtra("browser_fallback_url")
-                if (!fallback.isNullOrBlank()) view.loadUrl(fallback) else toast("没有找到能打开它的 App 哦")
+                val tab = view.tag as? TabState
+                if (UrlUtils.isWebUrl(fallback) && tab != null) load(tab, fallback!!) // 走 load：HTTPS 升级照常
+                else toast("没有找到能打开它的 App 哦")
             }
         } catch (e: Exception) {
             toast("这个链接打不开呢 🥺")
