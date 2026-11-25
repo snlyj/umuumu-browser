@@ -133,20 +133,43 @@ fun SecurityWarningPage(tab: TabState, w: SecurityWarning, controller: BrowserCo
                 .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(if (w.kind == SecurityWarning.Kind.CERT_ERROR) "🙀" else "🔒", fontSize = 48.sp)
+            Text(
+                when (w.kind) {
+                    SecurityWarning.Kind.CERT_ERROR -> "🙀"
+                    SecurityWarning.Kind.HTTPS_FAILED -> "🔒"
+                    SecurityWarning.Kind.NETWORK -> "😿"
+                },
+                fontSize = 48.sp,
+            )
             Spacer(Modifier.height(10.dp))
             Text(
-                if (w.kind == SecurityWarning.Kind.CERT_ERROR) "这个网站的证书有问题" else "这个网站不支持安全连接",
+                w.title ?: when (w.kind) {
+                    SecurityWarning.Kind.CERT_ERROR -> "这个网站的证书有问题"
+                    SecurityWarning.Kind.HTTPS_FAILED -> "这个网站不支持安全连接"
+                    SecurityWarning.Kind.NETWORK -> "网页打不开"
+                },
                 color = p.text, fontSize = 19.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
             )
+            w.netCode?.let {
+                Spacer(Modifier.height(6.dp))
+                Text(it, color = p.accentInk, fontSize = 13.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
+            }
             Spacer(Modifier.height(8.dp))
             Text(
-                if (w.kind == SecurityWarning.Kind.CERT_ERROR)
-                    "$host 的安全证书无效，可能有人在中间偷看或者冒充它。兔兔帮你拦下来啦，建议不要继续。"
-                else
-                    "唔姆唔姆想用加密的 https 打开 $host，但是没成功。用 http 打开的话，你在这个网站上看到和输入的内容可能会被别人看到哦。",
+                w.explain ?: when (w.kind) {
+                    SecurityWarning.Kind.CERT_ERROR ->
+                        "$host 的安全证书无效，可能有人在中间偷看或者冒充它。兔兔帮你拦下来啦，建议不要继续。"
+                    SecurityWarning.Kind.HTTPS_FAILED ->
+                        "唔姆唔姆想用加密的 https 打开 $host，但是没成功。用 http 打开的话，你在这个网站上看到和输入的内容可能会被别人看到哦。"
+                    SecurityWarning.Kind.NETWORK ->
+                        "加载 $host 的时候出错了。"
+                },
                 color = p.subText, fontSize = 14.sp, textAlign = TextAlign.Center,
             )
+            w.hint?.let {
+                Spacer(Modifier.height(10.dp))
+                Text(it, color = p.subText, fontSize = 13.sp, textAlign = TextAlign.Center)
+            }
             Spacer(Modifier.height(20.dp))
             PillButton("🐰 返回安全的地方", p.accent, p.onAccent, { controller.leaveWarning(tab) }, Modifier.fillMaxWidth())
             if (w.httpFallback != null) {

@@ -43,4 +43,23 @@ class UrlUtilsTest {
         // 以前 startsWith("localhost") 会把 localhostevil.com 当成 http://localhostevil.com（明文）
         assertEquals("https://localhostevil.com", UrlUtils.toUrl("localhostevil.com", e))
     }
+
+
+    @Test
+    fun pasteWithNewlineAndChineseOpensTheUrl() {
+        val e = SearchEngine.GOOGLE
+        val pasted = "https://jiehua.13-58-183-35.sslip.io/\n登录到结花的小站"
+        assertEquals("https://jiehua.13-58-183-35.sslip.io/", UrlUtils.toUrl(pasted, e))
+        assertEquals(
+            "https://jiehua.13-58-183-35.sslip.io/",
+            UrlUtils.toUrl("https://jiehua.13-58-183-35.sslip.io/\r\n登录…", e),
+        )
+        assertEquals("https://example.com/path", UrlUtils.toUrl("  https://example.com/path  \n extra", e))
+        assertEquals("https://example.com/a", UrlUtils.toUrl("请打开 https://example.com/a 看看", e))
+        val two = UrlUtils.toUrl("https://a.com 还有 https://b.com", e)
+        assertTrue(two, two.startsWith("https://www.google.com/search?q="))
+        assertEquals("https://jiehua.13-58-183-35.sslip.io/", UrlUtils.toUrl("https://jiehua.13-58-183-35.sslip.io/", e))
+        assertEquals("https://jiehua.13-58-183-35.sslip.io", UrlUtils.toUrl("jiehua.13-58-183-35.sslip.io", e))
+        assertTrue(UrlUtils.toUrl("javascript://%0aalert(1)\n登录", e).startsWith("https://www.google.com/search"))
+    }
 }

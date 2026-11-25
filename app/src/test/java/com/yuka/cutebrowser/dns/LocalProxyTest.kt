@@ -3,6 +3,7 @@ package com.yuka.cutebrowser.dns
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.InputStream
@@ -192,5 +193,47 @@ class LocalProxyTest {
         assertEquals("::1" to 443, LocalProxy.splitHostPort("[::1]", 443))
         assertEquals(null, LocalProxy.splitHostPort("a.com:99999", 80))
         assertEquals(null, LocalProxy.splitHostPort(":443", 80))
+    }
+
+
+    @Test
+    fun publicSslipAddressIsNotTreatedAsRebinding() {
+        val pub = InetAddress.getByName("13.58.183.35")
+        val p = LocalProxy(resolver) // 默认不允许回环目标，但不该误伤公网 IP
+        try {
+            val ok = p.allowedTargets("jiehua.13-58-183-35.sslip.io", 443, listOf(pub))
+            assertEquals(listOf(pub), ok)
+        } finally {
+            p.stop()
+        }
+    }
+
+    @Test
+    fun outboundHttpProxyReceivesConnectToResolvedIp() {
+        val parent = ServerSocket(0, 50, loop)
+        val seen = ArrayBlockingQueue<String>(1)
+        Thread {
+            parent.accept().use { s ->
+                val lines = readHead(s.getInputStream())
+                seen.put(lines.first())
+                s.getOutputStream().write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
+                s.getOutputStream().write("pong".toByteArray())
+            }
+        }.start()
+        val p = LocalProxy(resolver, allowLoopbackTargets = true, outboundProxy = { "127.0.0.1" to parent.localPort })
+        val port = p.start()
+        try {
+            Socket().apply { connect(InetSocketAddress(loop, port), 2000); soTimeout = 5000 }.use { c ->
+                c.getOutputStream().write("CONNECT upstream.test:${upstream.localPort} HTTP/1.1\r\n\r\n".toByteArray())
+                val head = readHead(c.getInputStream())
+                assertEquals("HTTP/1.1 200 Connection Established", head.first())
+                assertEquals("pong", String(c.getInputStream().readBytes()))
+            }
+            val req = seen.poll(2, TimeUnit.SECONDS)
+            assertNotNull(req)
+            assertTrue(req, req!!.startsWith("CONNECT 127.0.0.1:"))
+        } finally {
+            p.stop(); parent.close()
+        }
     }
 }

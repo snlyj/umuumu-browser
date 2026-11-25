@@ -208,4 +208,37 @@ class FilterEngineTest {
         }
         assertFalse(e.shouldBlock(req("https://anything.com/x")))
     }
+
+    @Test
+    fun sslipIoAndNipIoAreSeparateSites() {
+        assertEquals("13-58-183-35.sslip.io", com.yuka.cutebrowser.filter.Domains.base("jiehua.13-58-183-35.sslip.io"))
+        assertEquals("13-58-183-35.sslip.io", com.yuka.cutebrowser.filter.Domains.base("www.jiehua.13-58-183-35.sslip.io"))
+        assertTrue(com.yuka.cutebrowser.filter.Domains.base("a.1-2-3-4.sslip.io") != com.yuka.cutebrowser.filter.Domains.base("b.5-6-7-8.sslip.io"))
+        assertEquals("app.nip.io", com.yuka.cutebrowser.filter.Domains.base("foo.app.nip.io"))
+    }
+
+    @Test
+    fun shippedListsDoNotBlockSslipIoBlog() {
+        val e = FilterEngine()
+        File("src/main/assets/filters/easylist.txt").bufferedReader().use { e.addList(it) }
+        File("src/main/assets/filters/easyprivacy.txt").bufferedReader().use { e.addList(it) }
+        File("src/main/assets/adblock_hosts.txt").bufferedReader().useLines { lines ->
+            e.addHosts(lines.map { it.trim() }.filter { it.isNotEmpty() && it[0] != '#' }.toList())
+        }
+        e.finish()
+        val page = "jiehua.13-58-183-35.sslip.io"
+        val urls = listOf(
+            "https://jiehua.13-58-183-35.sslip.io/" to ResType.SUBDOC,
+            "https://jiehua.13-58-183-35.sslip.io/static/sky-ribbon.css?v=14" to ResType.STYLESHEET,
+            "https://jiehua.13-58-183-35.sslip.io/static/sky-ribbon.js?v=14" to ResType.SCRIPT,
+            "https://jiehua.13-58-183-35.sslip.io/static/hero-banner.webp?v=3&orig=/static/hero-banner.jpg" to ResType.IMAGE,
+            "https://jiehua.13-58-183-35.sslip.io/static/avatar.webp?v=3&orig=/static/avatar.jpg" to ResType.IMAGE,
+            "https://jiehua.13-58-183-35.sslip.io/uploads/1795593779-91bcd593.webp?orig=/uploads/1795593780-96aa8a31.jpg" to ResType.IMAGE,
+            "https://jiehua.13-58-183-35.sslip.io/rss.xml" to ResType.UNKNOWN,
+            "https://jiehua.13-58-183-35.sslip.io/static/favicon-ribbon.svg?v=2" to ResType.IMAGE,
+        )
+        for ((u, ty) in urls) {
+            assertFalse("blocked $u", e.shouldBlock(req(u, page = page, type = ty)))
+        }
+    }
 }

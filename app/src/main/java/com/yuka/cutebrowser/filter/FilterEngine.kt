@@ -86,7 +86,7 @@ object Domains {
         // 共享托管：每个子域都是不同的主人
         "web.app", "firebaseapp.com", "workers.dev", "gitlab.io", "azurewebsites.net", "cloudfront.net", "amazonaws.com",
         "myshopify.com", "wordpress.com", "weebly.com", "wixsite.com", "glitch.me", "onrender.com", "fly.dev", "surge.sh",
-        "neocities.org", "duckdns.org", "ngrok.io", "ngrok-free.app", "repl.co", "replit.app", "github.dev", "codeberg.page",
+        "neocities.org", "duckdns.org", "ngrok.io", "ngrok-free.app", "sslip.io", "nip.io", "xip.io", "repl.co", "replit.app", "github.dev", "codeberg.page",
         "bitbucket.io", "tumblr.com", "substack.com", "notion.site", "framer.app", "webflow.io", "carrd.co", "lofter.com",
     )
 

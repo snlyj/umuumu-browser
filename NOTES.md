@@ -377,3 +377,46 @@ Also: `DohManager.awaitInitial()` now times out on `Dispatchers.IO` (wall clock)
 
 ### Not runtime-verified
 The three phone-reported issues were not re-tested on a device or emulator (this box still cannot smoke-test a phone/AVD reliably). Speed-test crash-proofing and settings dismiss policy are covered by unit tests; Seattle DST/search by `TzLangTest`. Whether leftover-fling dismiss is gone, and whether 测速 stays up on the user's release APK, needs a phone check.
+
+## v1.6.3 — 粘贴网址被当成搜索、加密 DNS 绕过系统 HTTP 代理、可爱错误页 (versionCode 10)
+
+User report (pt10u) after testing the v1.6.2 release APK on a real phone (likely in China, Seattle proxy, Encrypted DNS ON): some sites would not open, example `https://jiehua.13-58-183-35.sslip.io`. A screenshot later showed the address bar as a Google search of the pasted URL plus a newline plus Chinese (`登录…`, query has `%0A`), and the stock WebView page `net::ERR_CONNECTION_CLOSED`. Encrypted DNS and the user's proxy were both on.
+
+### Issue 1 — pasted URL + newline + 说明文字 became a search
+`UrlUtils.toUrl` only trimmed ends, and `schemeRegex` uses `.` without DOTALL, so a mid-string newline made the whole paste look unlike a URL. Spaces trigger search, but `\n` is whitespace that `contains(' ')` does not catch, so the input still went to the search engine. That is why the address bar showed `https://www.google.com/search?q=https%3A%2F%2Fjiehua…%0A%E7%99%BB%E5%BD%95…`.
+
+**Fix:** trim; if the whole input, the first line, or the text with everything after the first newline stripped is a loadable URL, open that URL. If the paste contains exactly one `http(s)://…` URL mixed with other text, open that URL. Several URLs, or `javascript:` / `file:`, still go to search. Covered by `UrlUtilsTest.pasteWithNewlineAndChineseOpensTheUrl` (includes the user's host).
+
+### Issue 2 — even that Google search failed with ERR_CONNECTION_CLOSED (DoH + proxy)
+The settings copy already warned that a system HTTP proxy is ignored when App-encrypted DNS is on (VPN is not). That was accurate, and is the smoking gun for Clash / 小飞机「仅 HTTP 代理」users in China.
+
+`ProxyController` points WebView at `LocalProxy` (127.0.0.1, random port). `LocalProxy.open()` then did a raw `Socket.connect()` to the DoH-resolved IP, so a non-VPN system HTTP proxy was skipped. VpnService still routes those sockets, so a VPN / enhanced-mode app should have been fine. Direct connections to Google (and sometimes to Cloudflare DoH) from China commonly get RST / CONNECTION_CLOSED — matching the screenshot (the failed page was the Google search, not necessarily the sslip.io origin itself).
+
+Rebinding 403 and LAN bypass were checked and are unlikely: `13.58.183.35` is a public address, and `sslip.io` is not in the `*.local` / `*.lan` bypass list. Shipped EasyList + EasyPrivacy + AdAway do not block the site's document or its same-origin static/upload URLs (unit test). `http://` to that host returns 500 from Pingora; typed `https://` should not fall back. HTTP/3 alt-svc is between WebView and the origin through the CONNECT tunnel, not the first-order failure.
+
+**Fix:**
+- `SystemHttpProxy` reads `ConnectivityManager.defaultProxy`, then `http(s).proxyHost`, then `ProxySelector`. Loopback hops are allowed (Clash is often `127.0.0.1:7890`); LocalProxy only skips a hop that is itself (`isSelf`).
+- `LocalProxy` CONNECTs to the already-resolved IP through that hop (so the parent proxy does not re-resolve with possibly poisoned system DNS). CONNECT response headers are read one byte at a time up to `\r\n\r\n`, so TLS bytes are not swallowed. `DohManager.apply` now takes a `Context` and builds the local proxy with this hop.
+- OkHttp's DoH client uses the same system HTTP proxy (`SystemHttpProxy.lastKnown` is warmed from Context when DoH starts).
+- Non-strict DoH already falls back to system DNS; strict still fails closed. When a page still cannot load, WebView errors are no longer left on the stock "Webpage not available" page.
+
+Settings disclaimer is now: 如果系统里设了 HTTP 代理（Clash 的 HTTP 端口等），本地代理会再经它连出去；VPN 始终有效.
+
+### Cute error page
+`onReceivedError` for the main frame now sets `SecurityWarning.Kind.NETWORK` (HTTPS-upgrade failures that are not `ERROR_HOST_LOOKUP` stay `HTTPS_FAILED` with an http fallback). `NetErrors` maps `net::ERR_*` / `WebViewClient.ERROR_*` to a Chinese title and explanation, and if encrypted DNS is on, a hint to try turning it off (wording mentions the proxy hop / VPN / enhanced mode when a system HTTP proxy is set). The overlay already covers the WebView when `tab.warning` is set. `SecurityWarningPage` shows 😿, the error code, the explanation, and the hint.
+
+### Also
+`Domains.SECOND_LEVEL` now includes `sslip.io` / `nip.io` / `xip.io`, so different sslip hosts are different sites for anti-fp seeds and third-party checks. This was a correctness gap, not the load-failure cause.
+
+### Tests / artifacts
+- New: `UrlUtilsTest` paste cases, `NetErrorsTest`, `LocalProxyTest` public-sslip + outbound HTTP CONNECT hop, `FilterEngineTest` sslip/nip eTLD+1 and shipped lists vs the example site's URLs.
+- `./gradlew testDebugUnitTest`: 109 tests, 2 skipped (`DohLiveTest`), 0 real failures. Three screenshot tests (`ScreenshotTest` / `TzLangScreenshotTest`) can still flake `waitForBrowser` in a full-suite run; they passed in isolation (same as v1.6.2). Screenshots were not re-recorded (no visual change in the existing goldens).
+- Release APK signed CN=UmuUmu, versionCode 10 / 1.6.3: 3,322,614 B (same size as v1.6.2; version confirmed via aapt). Debug 13,068,273 B. Source zip 88 files, 1,442,780 B, no keystore/.git.
+
+### What to check on the phone
+- Paste only the URL, or paste URL + 换行 + 说明: the address bar should open `https://jiehua.13-58-183-35.sslip.io/`, not a Google search.
+- If a page still fails, the cute error page should show the `net::ERR_…` code and a Chinese explanation. With encrypted DNS on, try turning it off once.
+- If the Seattle proxy is Clash / 小飞机 in HTTP-port-only mode, 1.6.3 should now send WebView and DoH traffic through that proxy. VPN / 增强模式 was already supposed to work. Prefer `https://`, not `http://`.
+
+### Not runtime-verified
+Paste extraction, proxy CONNECT chaining, and the error-page copy are covered by unit tests. This box cannot reliably smoke-test a phone or AVD, and was not used to replay the user's Clash/VPN path or the sslip.io origin through LocalProxy. Whether Google and that site open on the user's phone with DoH + their Seattle proxy still needs a device check.

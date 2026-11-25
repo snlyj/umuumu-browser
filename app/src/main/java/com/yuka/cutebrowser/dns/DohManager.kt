@@ -117,7 +117,7 @@ object DohManager {
     /** 在 Activity 的 lifecycleScope（主线程）里收集设置并应用。第一次应用完之后 [awaitInitial] 才返回 */
     suspend fun run(ctx: Context) {
         prefs(ctx).collect { p ->
-            runCatching { apply(p) }.onFailure { e -> _status.value = DohStatus(error = "启动失败：${e.message}") }
+            runCatching { apply(p, ctx.applicationContext) }.onFailure { e -> _status.value = DohStatus(error = "启动失败：${e.message}") }
             initial.complete(Unit)
         }
     }
@@ -132,7 +132,8 @@ object DohManager {
         withContext(Dispatchers.IO) { withTimeoutOrNull(timeoutMs) { initial.await() } }
     }
 
-    private suspend fun apply(p: DohPrefs) {
+    private suspend fun apply(p: DohPrefs, ctx: Context) {
+        SystemHttpProxy.current(ctx) // 先记下系统 HTTP 代理，OkHttp 的 DoH 请求也会用到
         if (!p.enabled) { disable(); _status.value = DohStatus(); return }
         if (!supported) { disable(); _status.value = DohStatus(error = "你的 WebView 版本太旧，不支持"); return }
         val provider = p.provider() ?: run {
@@ -148,7 +149,7 @@ object DohManager {
                 cur?.let { old -> main.postDelayed({ old.close() }, 10_000) } // 正在进行的查询先让它们做完
             }
         }
-        val px = proxy ?: LocalProxy(r).also { proxy = it }
+        val px = proxy ?: LocalProxy(r, outboundProxy = { SystemHttpProxy.current(ctx) }).also { proxy = it }
         px.resolver = r
         val port = withContext(Dispatchers.IO) { px.start() }
         if (!overrideSet || _status.value.port != port) {

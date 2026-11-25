@@ -119,10 +119,18 @@ class TabState(val id: Long, val incognito: Boolean = false) {
     val isSecure: Boolean get() = url.startsWith("https://", ignoreCase = true)
 }
 
-/** 安全提示页 */
+/** 安全提示页 / 网络错误页 */
 @Immutable
-data class SecurityWarning(val kind: Kind, val url: String, val httpFallback: String?) {
-    enum class Kind { HTTPS_FAILED, CERT_ERROR }
+data class SecurityWarning(
+    val kind: Kind,
+    val url: String,
+    val httpFallback: String?,
+    val netCode: String? = null,
+    val title: String? = null,
+    val explain: String? = null,
+    val hint: String? = null,
+) {
+    enum class Kind { HTTPS_FAILED, CERT_ERROR, NETWORK }
 }
 
 /** 网站申请权限时弹的可爱对话框 */
@@ -925,11 +933,19 @@ class BrowserController(
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
                 if (!request.isForMainFrame) return
                 val failed = request.url.toString()
-                val from = tab.upgradedFrom ?: return
-                if (!failed.startsWith("https://", ignoreCase = true)) return
-                if (HttpsUpgrade.hostOf(failed) != HttpsUpgrade.hostOf(from)) return
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && error.errorCode == ERROR_HOST_LOOKUP) return // 域名都解析不了，http 也一样打不开
-                tab.warning = SecurityWarning(SecurityWarning.Kind.HTTPS_FAILED, failed, from)
+                val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) error.errorCode else 0
+                val desc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) error.description?.toString() else null
+                val from = tab.upgradedFrom?.takeIf {
+                    failed.startsWith("https://", ignoreCase = true) && HttpsUpgrade.hostOf(failed) == HttpsUpgrade.hostOf(it)
+                }
+                // 自动升级 https 失败、而且不是「域名都不存在」：仍给出「用 http 打开」
+                if (from != null && code != android.webkit.WebViewClient.ERROR_HOST_LOOKUP) {
+                    val d = NetErrors.describe(code, desc, com.yuka.cutebrowser.dns.DohManager.status.value.active, com.yuka.cutebrowser.dns.SystemHttpProxy.current(activity) != null)
+                    tab.warning = SecurityWarning(SecurityWarning.Kind.HTTPS_FAILED, failed, from, d.code, d.title, d.explain, d.hint)
+                    return
+                }
+                val d = NetErrors.describe(code, desc, com.yuka.cutebrowser.dns.DohManager.status.value.active, com.yuka.cutebrowser.dns.SystemHttpProxy.current(activity) != null)
+                tab.warning = SecurityWarning(SecurityWarning.Kind.NETWORK, failed, null, d.code, d.title, d.explain, d.hint)
             }
 
             @SuppressLint("WebViewClientOnReceivedSslError")

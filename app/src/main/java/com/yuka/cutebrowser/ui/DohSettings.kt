@@ -191,7 +191,7 @@ fun DohSettingsSection() {
         Text(
             "开启后，网页请求先经过 App 内只给自己用的本地代理，由它用加密 DNS 查地址；网页内容（https）照样端到端加密，代理看不到。\n" +
                 "· 下载文件由系统下载器完成，仍然走系统 DNS\n" +
-                "· 系统里设置的代理会被忽略（VPN 不受影响）\n" +
+                "· 如果系统里设了 HTTP 代理（Clash 的 HTTP 端口等），本地代理会再经它连出去；VPN 始终有效\n" +
                 "· 如果上面的系统私人 DNS 已经开着，一般不需要再开这个",
             color = p.subText, fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp),
         )

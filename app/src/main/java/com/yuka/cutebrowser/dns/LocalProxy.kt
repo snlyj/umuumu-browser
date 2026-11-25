@@ -1,5 +1,6 @@
 package com.yuka.cutebrowser.dns
 
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -37,6 +38,8 @@ class LocalProxy(
     private val attemptDelayMs: Long = 250,
     /** 只给单元测试用：允许域名解析到回环地址（测试里的"上游"就在 127.0.0.1） */
     private val allowLoopbackTargets: Boolean = false,
+    /** 系统 / 代理 App 的 HTTP 代理。连出去时先 CONNECT 到这里，避免加密 DNS 把用户的 HTTP 代理盖掉。 */
+    private val outboundProxy: () -> Pair<String, Int>? = { null },
 ) {
     private var server: ServerSocket? = null
     @Volatile var port: Int = 0
@@ -205,7 +208,65 @@ class LocalProxy(
         if (addrs.isEmpty()) return null
         val ok = allowedTargets(host, port, addrs)
         if (ok.isEmpty()) throw ForbiddenTarget()
+        val hop = outboundProxy()?.takeIf { (h, p) -> !isSelf(h, p) }
+        if (hop != null) {
+            val deadline = System.nanoTime() + connectTimeoutMs * 1_000_000L
+            for (a in order(ok)) {
+                val left = ((deadline - System.nanoTime()) / 1_000_000L).toInt()
+                if (left <= 0) break
+                connectViaHttpProxy(hop.first, hop.second, a, port, left.coerceAtLeast(200))?.let {
+                    it.tcpNoDelay = true
+                    return it
+                }
+            }
+            return null
+        }
         return connectHappyEyeballs(order(ok), port)?.also { it.tcpNoDelay = true }
+    }
+
+    /**
+     * 经上级 HTTP 代理连到已经用 DoH 查好的 IP（CONNECT 用 IP，避免上级代理再走可能被污染的系统 DNS）。
+     * 只读到响应头结束为止，后面的字节留给隧道。
+     */
+    internal fun connectViaHttpProxy(proxyHost: String, proxyPort: Int, target: InetAddress, port: Int, timeoutMs: Int): Socket? {
+        val s = Socket()
+        try {
+            s.tcpNoDelay = true
+            s.connect(InetSocketAddress(proxyHost, proxyPort), timeoutMs)
+            s.soTimeout = timeoutMs
+            val ip = target.hostAddress?.substringBefore('%') ?: run { s.close(); return null }
+            val authority = if (':' in ip) "[$ip]" else ip
+            s.getOutputStream().write(
+                "CONNECT $authority:$port HTTP/1.1\r\nHost: $authority:$port\r\n\r\n".toByteArray(Charsets.ISO_8859_1),
+            )
+            s.getOutputStream().flush()
+            val first = readStatusAndHeaders(s.getInputStream()) ?: run { s.close(); return null }
+            if (Regex("^HTTP/1\\.\\d 200\\b").find(first) == null) {
+                s.close()
+                return null
+            }
+            s.soTimeout = 0
+            return s
+        } catch (e: Exception) {
+            runCatching { s.close() }
+            return null
+        }
+    }
+
+    /** 一字节一字节读到两个 CRLF，避免把隧道里的 TLS 数据读走 */
+    private fun readStatusAndHeaders(input: InputStream): String? {
+        val buf = ByteArrayOutputStream(256)
+        var last = 0
+        var crlf = 0
+        while (crlf < 2) {
+            val c = input.read()
+            if (c < 0) return null
+            buf.write(c)
+            if (c == '\n'.code && last == '\r'.code) crlf++ else if (c != '\r'.code) crlf = 0
+            last = c
+            if (buf.size() > 8192) return null
+        }
+        return buf.toString(Charsets.ISO_8859_1.name())
     }
 
     /**

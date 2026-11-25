@@ -8,6 +8,8 @@ object UrlUtils {
     private val hostRegex = Regex("^([a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,}(:\\d+)?(/.*)?$")
     private val ipRegex = Regex("^(\\d{1,3}\\.){3}\\d{1,3}(:\\d+)?(/.*)?$")
     private val localhostRegex = Regex("^localhost(:\\d+)?([/?#].*)?$", RegexOption.IGNORE_CASE)
+    /** 正文里出现的 http(s) 网址（粘贴「网址 + 换行 + 说明文字」时用） */
+    private val embeddedHttp = Regex("""https?://[^\s<>"'）)」\]]+""", RegexOption.IGNORE_CASE)
 
     /** 地址栏 / 外部 App / 书签 能让 WebView 直接加载的协议。javascript: file: content: intent: 等一律不行 */
     fun isLoadable(url: String): Boolean {
@@ -20,19 +22,41 @@ object UrlUtils {
         }
     }
 
-    /** 把地址栏输入转换成要打开的网址：像网址就直接打开，否则用搜索引擎搜。 */
+    /**
+     * 把地址栏输入转换成要打开的网址：像网址就直接打开，否则用搜索引擎搜。
+     * 粘贴时常会带上换行和后面的说明（比如「登录…」）：如果第一行、或去掉换行后的内容是网址，就打开它；
+     * 整段里只有一个 http(s) 链接时也打开那个链接，而不是把整段拿去搜索。
+     */
     fun toUrl(input: String, engine: SearchEngine): String {
         val text = input.trim()
         if (text.isEmpty()) return ""
-        if (text.contains(' ')) return engine.searchUrl(text)
+        asDirectUrl(text)?.let { return it }
+        val firstLine = text.lineSequence().first().trim()
+        if (firstLine.isNotEmpty() && firstLine != text) asDirectUrl(firstLine)?.let { return it }
+        extractSingleHttpUrl(text)?.let { asDirectUrl(it)?.let { u -> return u } }
+        if (text.any { it.isWhitespace() }) return engine.searchUrl(text)
+        return engine.searchUrl(text)
+    }
+
+    /** 一段输入本身就是一个可打开的网址（不是搜索词）时返回打开用的地址，否则 null */
+    fun asDirectUrl(input: String): String? {
+        val text = input.trim()
+        if (text.isEmpty() || text.any { it.isWhitespace() }) return null
         if (schemeRegex.matches(text) || text.startsWith("about:", true) || text.startsWith("data:", true)) {
-            // `javascript://%0aalert(1)`、file://、content://、intent:// 这类不是网页：当成搜索词，不执行也不加载
-            return if (isLoadable(text)) text else engine.searchUrl(text)
+            return if (isLoadable(text)) text else null
         }
         if (localhostRegex.matches(text)) return "http://$text"
         if (hostRegex.matches(text) || ipRegex.matches(text)) return "https://$text"
-        return engine.searchUrl(text)
+        return null
     }
+
+    /** 整段文字里恰好出现一个 http(s) 网址时返回它（去掉末尾常见标点） */
+    fun extractSingleHttpUrl(text: String): String? {
+        val found = embeddedHttp.findAll(text).map { trimUrlPunct(it.value) }.filter { it.isNotEmpty() }.distinct().toList()
+        return found.singleOrNull()
+    }
+
+    private fun trimUrlPunct(s: String): String = s.trimEnd('.', ',', ';', ':', '!', '?', '。', '，', '、', ')', '］', '】')
 
     /**
      * 网站来源（scheme://host[:port]），去掉路径和末尾斜杠。
