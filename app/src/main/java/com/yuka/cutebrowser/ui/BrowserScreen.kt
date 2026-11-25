@@ -2,6 +2,9 @@ package com.yuka.cutebrowser.ui
 
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -12,11 +15,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -41,14 +45,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -66,12 +74,18 @@ fun BrowserScreen(controller: BrowserController, repo: CuteRepository, protectio
     val scope = rememberCoroutineScope()
     val tab = controller.current
     val bookmarks by repo.bookmarks.collectAsState(initial = emptyList())
-    val isBookmarked by remember(bookmarks) { derivedStateOf { !tab.isHome && bookmarks.any { it.url == tab.url } } }
+    // 必须同时以 tab 为 key：derivedStateOf 的 lambda 会捕获当时的 tab，切换标签后不换 key 会一直盯着旧标签，爱心状态就错了
+    val isBookmarked by remember(bookmarks, tab) { derivedStateOf { !tab.isHome && bookmarks.any { it.url == tab.url } } }
     var sheet by remember { mutableStateOf(SheetType.None) }
     var heartBurst by remember { mutableIntStateOf(0) }
     var shield by remember { mutableStateOf(false) }
 
     BackHandler(enabled = controller.canGoBack()) { controller.back() }
+
+    // 键盘弹出时（输入网址、网页里打字）收起底部栏，把空间还给网页；derivedStateOf 保证只在"有/没有键盘"变化时才重组，不会跟着键盘动画每帧重组
+    val ime = WindowInsets.ime
+    val density = LocalDensity.current
+    val imeVisible by remember(ime, density) { derivedStateOf { ime.getBottom(density) > 0 } }
 
     val toggleBookmark: () -> Unit = {
         if (!tab.isHome && tab.url.isNotBlank()) {
@@ -93,9 +107,8 @@ fun BrowserScreen(controller: BrowserController, repo: CuteRepository, protectio
         Column(
             Modifier
                 .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .imePadding(),
+                // 状态栏 + 导航栏 + 键盘 + 刘海/挖孔（横屏时在左右两侧）
+                .windowInsetsPadding(WindowInsets.safeDrawing),
         ) {
             AddressBar(
                 tab = tab,
@@ -131,16 +144,18 @@ fun BrowserScreen(controller: BrowserController, repo: CuteRepository, protectio
                     tab.warning?.let { SecurityWarningPage(tab, it, controller) }
                 }
             }
-            BottomBar(
-                tabCount = controller.tabs.size,
-                canBack = controller.canGoBack(),
-                canForward = controller.canGoForward(),
-                onBack = { controller.back() },
-                onForward = { controller.forward() },
-                onHome = { controller.goHome() },
-                onTabs = { sheet = SheetType.Tabs },
-                onMenu = { sheet = SheetType.Menu },
-            )
+            AnimatedVisibility(visible = !imeVisible, enter = expandVertically(), exit = shrinkVertically()) {
+                BottomBar(
+                    tabCount = controller.tabs.size,
+                    canBack = controller.canGoBack(),
+                    canForward = controller.canGoForward(),
+                    onBack = { controller.back() },
+                    onForward = { controller.forward() },
+                    onHome = { controller.goHome() },
+                    onTabs = { sheet = SheetType.Tabs },
+                    onMenu = { sheet = SheetType.Menu },
+                )
+            }
         }
 
         FloatingHearts(heartBurst)
@@ -213,7 +228,10 @@ private fun AddressBar(
                     singleLine = true,
                     textStyle = TextStyle(color = p.text, fontSize = 15.sp),
                     cursorBrush = SolidColor(p.accent),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false,
+                        keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go,
+                    ),
                     keyboardActions = KeyboardActions(onGo = {
                         onSubmit(text.text)
                         keyboard?.hide()
@@ -221,6 +239,7 @@ private fun AddressBar(
                     }),
                     modifier = Modifier
                         .fillMaxWidth()
+                        .semantics { contentDescription = "地址栏，输入网址或搜索内容" }
                         .onFocusChanged {
                             if (it.isFocused && !focused) {
                                 text = text.copy(selection = TextRange(0, text.text.length))
