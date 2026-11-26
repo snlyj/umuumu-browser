@@ -24,7 +24,7 @@ enum class CuteThemeId(val label: String, val emoji: String) {
     STARRY("星空梦境", "🌙"),
     MINT("薄荷绿", "🍃"),
     LILAC("芙莉紫", "🔮"),
-    SODA("汽水蓝", "🫧"),
+    SODA("汽水蓝", "💧"),
     PEACH("蜜桃橘", "🍑"),
 }
 
