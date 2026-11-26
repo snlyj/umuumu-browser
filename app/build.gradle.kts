@@ -5,6 +5,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("io.github.takahirom.roborazzi")
+    id("androidx.baselineprofile")
 }
 
 // 看 Compose 稳定性/可跳过报告：./gradlew assembleRelease -PcomposeReports（输出到 app/build/compose-reports）
@@ -76,6 +77,12 @@ android {
     }
 }
 
+baselineProfile {
+    // 不在普通构建里自动跑（需要设备）；生成后放进 src/release/generated/baselineProfiles/，和 src/main/baseline-prof.txt 合并
+    automaticGenerationDuringBuild = false
+    saveInSrc = true
+}
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
@@ -98,6 +105,9 @@ dependencies {
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     // App 内加密 DNS（DoH）：HTTP/2 连接复用；只有开启加密 DNS 时才会加载
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // 有真机/模拟器时：./gradlew :app:generateBaselineProfile（见 baselineprofile/README.md）
+    baselineProfile(project(":baselineprofile"))
 
     // 截图测试（Robolectric + Roborazzi），只用于生成预览图
     testImplementation("junit:junit:4.13.2")

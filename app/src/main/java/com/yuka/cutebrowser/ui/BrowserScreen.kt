@@ -328,7 +328,8 @@ private fun BottomBar(
             Box(
                 Modifier
                     .size(24.dp)
-                    .border(2.dp, p.text, RoundedCornerShape(8.dp)),
+                    .border(2.dp, p.text, RoundedCornerShape(8.dp))
+                    .semantics { contentDescription = "标签页，共 $tabCount 个" },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(

@@ -1,8 +1,131 @@
-# 手写的 Baseline Profile：启动路径 + 首屏 + 常用交互的热点类/方法，
-# 安装后由 ART 提前编译（AOT），减少首次启动和首次滑动时的解释执行/JIT。
-# Compose、Material3、Activity 等库自带的 profile 会由 profileinstaller 一并合并。
-HSPLcom/yuka/cutebrowser/**->**(**)**
+# 手写的 Baseline Profile（没有设备可录；有设备后用 :baselineprofile 模块录一份真的，见 baselineprofile/README.md）
+#
+# 标志：H = 热（AOT 编译）  S = 启动路径（R8 据此把这些方法排在 dex 前面，冷启动少读页）  P = 启动之后用到
+# 以前所有 com.yuka.cutebrowser 的方法都标成 HSP：S 失去意义（dex 重排什么也排不出来）。
+# 现在：整个 App 的方法都是 H+P（照样预编译，滑动/开面板第一次不会解释执行），
+# 只有冷启动到「首页画出来 + 第一个网页开始加载」这条路径上的才加 S。
+#
+# 通配符：** 跨包/跨层，* 只在一层里；通配符在 AGP 构建时按 APK 里真实存在的类和方法展开。
+
+# ---------- 全部：热 + 启动后 ----------
 Lcom/yuka/cutebrowser/**;
-HSPLcom/yuka/cutebrowser/ui/**->**(**)**
-HSPLcom/yuka/cutebrowser/browser/**->**(**)**
-HSPLcom/yuka/cutebrowser/data/**->**(**)**
+HPLcom/yuka/cutebrowser/**->**(**)**
+
+# ---------- 启动路径（S）----------
+# Application / Activity / 埋点
+HSPLcom/yuka/cutebrowser/UmuApp;->**(**)**
+HSPLcom/yuka/cutebrowser/CrashLog;->install(**)**
+HSPLcom/yuka/cutebrowser/CrashLog$**->**(**)**
+HSPLcom/yuka/cutebrowser/MainActivity;->**(**)**
+HSPLcom/yuka/cutebrowser/MainActivity$**->**(**)**
+HSPLcom/yuka/cutebrowser/perf/**->**(**)**
+
+# 设置读取（DataStore + JSON 解码）
+HSPLcom/yuka/cutebrowser/data/CuteRepository;->**(**)**
+HSPLcom/yuka/cutebrowser/data/CuteRepository$**->**(**)**
+HSPLcom/yuka/cutebrowser/data/SecurityPrefs;->**(**)**
+HSPLcom/yuka/cutebrowser/data/SearchEngine;->**(**)**
+HSPLcom/yuka/cutebrowser/data/PageEntry;->**(**)**
+HSPLcom/yuka/cutebrowser/data/SitePermEntry;->**(**)**
+
+# 过滤引擎：后台加载（读缓存）
+HSPLcom/yuka/cutebrowser/browser/AdBlocker;->**(**)**
+HSPLcom/yuka/cutebrowser/browser/AdBlocker$**->**(**)**
+HSPLcom/yuka/cutebrowser/filter/FilterEngine;-><init>(**)**
+HSPLcom/yuka/cutebrowser/filter/FilterEngine;-><clinit>(**)**
+HSPLcom/yuka/cutebrowser/filter/FilterEngine$Companion;->readFrom(**)**
+HSPLcom/yuka/cutebrowser/filter/FilterEngine$Companion;->readRule(**)**
+HSPLcom/yuka/cutebrowser/filter/FilterEngine$Companion;->capacityFor(**)**
+HSPLcom/yuka/cutebrowser/filter/FilterEngine$Companion;-><init>(**)**
+HSPLcom/yuka/cutebrowser/filter/FilterEngine;->set*(**)**
+HSPLcom/yuka/cutebrowser/filter/RuleSet;->**(**)**
+HSPLcom/yuka/cutebrowser/filter/NetRule;-><init>(**)**
+
+# 控制器：创建、标签页、恢复会话、WebView 创建和配置
+HSPLcom/yuka/cutebrowser/browser/BrowserController;-><init>(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->newTab(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->restore(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->loadSessionAndStates(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->applySecurity(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->setWebDark(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->setFpExceptions(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->setTzLangSites(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->spoofConfig(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->syncProcessLocale(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->touch(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->trimLiveWebViews(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->webViewFor(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->createWebView(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->setupWebView(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->configureClients(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->extraHeaders(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->acceptLanguageFor(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->prewarm(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->warmHosts(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->get*(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->set*(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->canGo*(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController;->onHost*(**)**
+HSPLcom/yuka/cutebrowser/browser/BrowserController$Companion;->**(**)**
+HSPLcom/yuka/cutebrowser/browser/TabState;->**(**)**
+HSPLcom/yuka/cutebrowser/browser/SessionStore;->**(**)**
+HSPLcom/yuka/cutebrowser/browser/SessionStore$**->**(**)**
+HSPLcom/yuka/cutebrowser/browser/Downloads;-><init>(**)**
+HSPLcom/yuka/cutebrowser/browser/BlobBridge;->**(**)**
+HSPLcom/yuka/cutebrowser/browser/HostWarmer;->**(**)**
+HSPLcom/yuka/cutebrowser/browser/HostWarmer$**->**(**)**
+
+# WebView 的 Client 回调（第一个网页一开始加载就会走到）
+HSPLcom/yuka/cutebrowser/browser/BrowserController$configureClients$**->**(**)**
+
+# 安全 / 隐私：每个 WebView 创建时都要走
+HSPLcom/yuka/cutebrowser/security/**->**(**)**
+HSPLcom/yuka/cutebrowser/privacy/**->**(**)**
+HSPLcom/yuka/cutebrowser/dns/DohManager;->**(**)**
+HSPLcom/yuka/cutebrowser/dns/DohManager$**->**(**)**
+HSPLcom/yuka/cutebrowser/dns/DohPrefs;->**(**)**
+HSPLcom/yuka/cutebrowser/dns/SystemHttpProxy;->**(**)**
+
+# 界面：首页、地址栏、进度条、底栏、主题、图标
+HSPLcom/yuka/cutebrowser/ui/BrowserScreenKt;->**(**)**
+HSPLcom/yuka/cutebrowser/ui/BrowserScreenKt$**->**(**)**
+HSPLcom/yuka/cutebrowser/ui/ComposableSingletons$BrowserScreenKt;->**(**)**
+HSPLcom/yuka/cutebrowser/ui/ComponentsKt;->**(**)**
+HSPLcom/yuka/cutebrowser/ui/ComponentsKt$**->**(**)**
+HSPLcom/yuka/cutebrowser/ui/HomePageKt;->**(**)**
+HSPLcom/yuka/cutebrowser/ui/HomePageKt$**->**(**)**
+HSPLcom/yuka/cutebrowser/ui/ComposableSingletons$HomePageKt;->**(**)**
+HSPLcom/yuka/cutebrowser/ui/CuteIcons**->**(**)**
+HSPLcom/yuka/cutebrowser/ui/CopiedLink**->**(**)**
+HSPLcom/yuka/cutebrowser/ui/theme/**->**(**)**
+HSPLcom/yuka/cutebrowser/ui/SecurityUiKt;->ShieldChip(**)**
+HSPLcom/yuka/cutebrowser/ui/SecurityUiKt$ShieldChip$**->**(**)**
+HSPLcom/yuka/cutebrowser/ui/LockScreen**->**(**)**
+
+# ---------- 热路径（H，不放进启动布局）----------
+# 每个子资源请求：shouldInterceptRequest → AdBlocker → FilterEngine 匹配
+HPLcom/yuka/cutebrowser/filter/**->**(**)**
+HPLcom/yuka/cutebrowser/browser/AdBlocker;->shouldBlock(**)**
+HPLcom/yuka/cutebrowser/browser/AdBlocker;->pageAllowlisted(**)**
+HPLcom/yuka/cutebrowser/browser/AdBlocker;->cosmeticCss(**)**
+HPLcom/yuka/cutebrowser/browser/AdBlocker;->emptyResponse(**)**
+# 地址栏：输入、提交、网址判断
+HPLcom/yuka/cutebrowser/browser/UrlUtils;->**(**)**
+HPLcom/yuka/cutebrowser/browser/AddressInput;->**(**)**
+HPLcom/yuka/cutebrowser/browser/BrowserController;->submit(**)**
+HPLcom/yuka/cutebrowser/browser/BrowserController;->open(**)**
+HPLcom/yuka/cutebrowser/browser/BrowserController;->load(**)**
+HPLcom/yuka/cutebrowser/browser/BrowserController;->warmTyped(**)**
+HPLcom/yuka/cutebrowser/browser/BrowserController;->warmSearchEngine(**)**
+# 切标签、回收、缩略图
+HPLcom/yuka/cutebrowser/browser/BrowserController;->switchTo(**)**
+HPLcom/yuka/cutebrowser/browser/BrowserController;->closeTab(**)**
+HPLcom/yuka/cutebrowser/browser/BrowserController;->release(**)**
+HPLcom/yuka/cutebrowser/browser/BrowserController;->disposeWebView(**)**
+HPLcom/yuka/cutebrowser/browser/BrowserController;->captureThumbnail(**)**
+HPLcom/yuka/cutebrowser/browser/BrowserController;->onTrimMemory(**)**
+HPLcom/yuka/cutebrowser/browser/BrowserController;->saveSession(**)**
+HPLcom/yuka/cutebrowser/perf/Thumbnails;->**(**)**
+# 底部面板（菜单 / 标签页 / 收藏 / 历史 / 设置）第一次打开
+HPLcom/yuka/cutebrowser/ui/Sheets**->**(**)**
+HPLcom/yuka/cutebrowser/ui/ComposableSingletons$Sheets**->**(**)**
