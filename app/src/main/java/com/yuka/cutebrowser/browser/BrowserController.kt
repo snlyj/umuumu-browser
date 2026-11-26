@@ -52,6 +52,7 @@ import com.yuka.cutebrowser.data.SearchEngine
 import com.yuka.cutebrowser.data.SecurityPrefs
 import com.yuka.cutebrowser.privacy.fingerprint.FingerprintShield
 import com.yuka.cutebrowser.privacy.fingerprint.FpSeed
+import com.yuka.cutebrowser.privacy.fingerprint.WorkerScripts
 import com.yuka.cutebrowser.privacy.locale.LangPolicy
 import com.yuka.cutebrowser.privacy.locale.ProcessLocale
 import com.yuka.cutebrowser.privacy.locale.SiteTzLang
@@ -139,8 +140,30 @@ data class PermissionPrompt(
     val origin: String,
     val perms: List<SitePerm>,
     val incognito: Boolean,
+    /** 隐身标签、明文 http 网站：不提供"记住我的选择" */
+    val canRemember: Boolean = !incognito,
     val onResult: (allow: Boolean, remember: Boolean) -> Unit,
 )
+
+/** 进程级的 ServiceWorker 拦截回调 → 当前的 BrowserController（没有就不拦） */
+internal object ServiceWorkerHook {
+    @Volatile var handler: ((WebResourceRequest, String?) -> WebResourceResponse?)? = null
+    private val installed = HashSet<String>()
+
+    /** [profile] null = 默认 profile。每个 profile 只装一次 */
+    @Synchronized
+    fun install(profile: String?) {
+        val key = profile ?: ""
+        if (key in installed) return
+        if (WebHardening.setServiceWorkerClient(profile) { req -> runCatching { handler?.invoke(req, profile) }.getOrNull() }) installed += key
+    }
+}
+
+/** 哪些网站权限可以记住 */
+object SitePermPolicy {
+    fun canRemember(origin: String, incognito: Boolean): Boolean =
+        !incognito && origin.startsWith("https://", ignoreCase = true)
+}
 
 data class PendingDownload(val url: String, val userAgent: String?, val contentDisposition: String?, val mimeType: String?, val view: WebView?)
 
@@ -169,6 +192,10 @@ class BrowserController(
     /** 用户允许用 http 打开的网站（隐身模式下的选择只在本次有效） */
     @Volatile var httpAllowed: Set<String> = emptySet()
     private val incognitoHttpAllowed = HashSet<String>()
+    /** 隐身标签里改的网站设置（只在内存里，见下面「隐身里改的网站设置」） */
+    @Volatile private var incogAdBlock: Map<String, Boolean> = emptyMap()
+    @Volatile private var incogFp: Map<String, Boolean> = emptyMap()
+    @Volatile private var incogTz: Map<String, SiteTzLang> = emptyMap()
     var sitePerms: List<SitePermEntry> = emptyList()
 
     var permissionPrompt by mutableStateOf<PermissionPrompt?>(null)
@@ -201,6 +228,9 @@ class BrowserController(
     private val pendingBlobs = HashMap<String, PendingBlob>()
     private val blobBridge = BlobBridge { json, origin -> activity.runOnUiThread { onBlobMessage(json, origin) } }
 
+    /** 没能放进隐身 profile 的 WebView（见 createWebView） */
+    private val unisolated = java.util.WeakHashMap<WebView, Boolean>()
+
     /** 空闲时预热好的一个 WebView，第一次打开网页时直接拿来用 */
     private var spare: WebView? = null
 
@@ -211,11 +241,41 @@ class BrowserController(
     /** Activity 销毁时调用：DohManager 是进程级单例，只清掉还指向自己的回调 */
     fun releaseGlobals() {
         if (DohManager.acceptLanguageFor === langHook) DohManager.acceptLanguageFor = null
+        if (ServiceWorkerHook.handler === swHook) ServiceWorkerHook.handler = null
+    }
+
+    // ---------------- Worker 脚本（http(s)）：在网络层拼上防护脚本 ----------------
+
+    /**
+     * 认得出是 Worker / SharedWorker / ServiceWorker 主脚本的请求（见 [WorkerScripts.kind]）：自己取回来，前面拼上防护脚本。
+     * 其它请求、或者出了任何问题都返回 null，让 WebView 照常加载。在 WebView 的后台线程调用。
+     */
+    private fun workerScriptResponse(request: WebResourceRequest, pageHost: String, incognito: Boolean, cm: CookieManager): WebResourceResponse? {
+        if (!request.method.equals("GET", ignoreCase = true)) return null
+        WorkerScripts.kind(request.requestHeaders) ?: return null
+        if (!fingerprint.active) return null
+        val url = request.url.toString()
+        if (!url.startsWith("https://", ignoreCase = true) && !url.startsWith("http://", ignoreCase = true)) return null
+        if (fingerprint.isExempt(pageHost, incognito) && !fingerprint.spoofFor(incognito).hasEffect) return null
+        val prefix = fingerprint.workerScript(incognito, FpSeed.site(pageHost)) ?: return null
+        val r = WorkerScripts.fetch(com.yuka.cutebrowser.net.AppHttp.client, url, request.requestHeaders, runCatching { cm.getCookie(url) }.getOrNull(), prefix)
+            ?: return null
+        r.setCookies.forEach { h -> runCatching { cm.setCookie(url, h) } }
+        return WebResourceResponse("text/javascript", "utf-8", r.status, r.reason, r.headers, java.io.ByteArrayInputStream(r.body))
+    }
+
+    /** ServiceWorker 的请求不经过 WebViewClient：单独的回调（进程级，所以经过 [ServiceWorkerHook] 转一下，Activity 销毁时断开） */
+    private val swHook: (WebResourceRequest, String?) -> WebResourceResponse? = { req, profile ->
+        val host = req.url.host
+        if (host == null) null
+        else workerScriptResponse(req, host.lowercase(), profile != null, WebHardening.cookieManager(profile))
     }
 
     init {
         ProcessLocale.apply(LangPolicy.processLang(spoofConfig(), sec.antiFp)) // 必须在第一个 WebView 创建之前
         DohManager.acceptLanguageFor = langHook
+        ServiceWorkerHook.handler = swHook
+        ServiceWorkerHook.install(null)
         newTab()
         activity.lifecycleScope.launch(Dispatchers.IO) { fingerprint.preload() }
     }
@@ -242,7 +302,31 @@ class BrowserController(
     // ---------------- 时区 / 语言伪造 ----------------
 
 
-    private fun spoofConfig(s: SecurityPrefs = sec) = SpoofConfig(s.tzOn, s.tz, s.lang, tzSites)
+    private fun spoofConfig(s: SecurityPrefs = sec, incognito: Boolean = false): SpoofConfig {
+        val base = SpoofConfig(s.tzOn, s.tz, s.lang, tzSites)
+        if (!incognito || incogTz.isEmpty()) return base
+        val m = LinkedHashMap(tzSites)
+        incogTz.forEach { (site, v) -> if (v.isEmpty) m.remove(site) else m[site] = v }
+        return base.copy(sites = m)
+    }
+
+    // ---------------- 隐身里改的网站设置：只在内存里 ----------------
+    // 隐身标签里在盾牌菜单切换"拦截广告 / 防指纹 / 时区语言"，不能把网站名写进 DataStore（那等于留下了浏览记录）。
+    // 这些覆盖只对隐身标签生效，结束隐身（关掉最后一个隐身标签）就丢掉。
+    // （incogAdBlock / incogFp / incogTz 声明在类的开头：init 里就会用到 spoofConfig）
+
+    /** 这个标签在这个网站上要不要拦截（隐身标签先看内存里的覆盖） */
+    fun siteAdBlockOn(tab: TabState, host: String): Boolean {
+        if (tab.incognito) incogAdBlock[host]?.let { return it }
+        return host !in adBlockOff
+    }
+
+    /** 这个标签在这个网站上是不是关了防指纹 */
+    fun siteFpExempt(tab: TabState, host: String): Boolean = fingerprint.isExempt(host, tab.incognito)
+
+    private fun pushIncognitoOverrides() {
+        fingerprint.setIncognitoOverrides(incogFp, incogTz, liveWebViews())
+    }
 
     /** 进程默认语言 = WebView 原生 Accept-Language 的来源；变了返回 true */
     private fun syncProcessLocale(): Boolean = ProcessLocale.apply(LangPolicy.processLang(spoofConfig(), sec.antiFp))
@@ -258,18 +342,27 @@ class BrowserController(
     fun setSiteTzLang(host: String, v: SiteTzLang?) {
         val site = FpSeed.site(host)
         if (site.isEmpty()) return
-        setTzLangSites(if (v == null || v.isEmpty) tzSites - site else tzSites + (site to v))
-        activity.lifecycleScope.launch { repo.setSiteTzLang(site, v) }
+        if (current.incognito) {
+            incogTz = incogTz + (site to (v ?: SiteTzLang())) // 空的 = 回到跟随全局
+            pushIncognitoOverrides()
+        } else {
+            setTzLangSites(if (v == null || v.isEmpty) tzSites - site else tzSites + (site to v))
+            activity.lifecycleScope.launch { repo.setSiteTzLang(site, v) }
+        }
         reloadWithLang(current)
     }
 
-    fun siteTzLang(host: String): SiteTzLang = tzSites[FpSeed.site(host)] ?: SiteTzLang()
+    fun siteTzLang(host: String): SiteTzLang {
+        val site = FpSeed.site(host)
+        if (current.incognito) incogTz[site]?.let { return it }
+        return tzSites[site] ?: SiteTzLang()
+    }
 
     /** 这个网址的主页面请求该用什么 Accept-Language。和 WebView 原生发的一样就返回 null（不用额外处理） */
-    fun acceptLanguageFor(url: String?): String? {
+    fun acceptLanguageFor(url: String?, incognito: Boolean = false): String? {
         val host = runCatching { Uri.parse(url).host }.getOrNull() ?: return null
         val site = FpSeed.site(host)
-        val eff = LangPolicy.effective(spoofConfig(), sec.antiFp, fingerprint.isExempt(host), site)
+        val eff = LangPolicy.effective(spoofConfig(incognito = incognito), sec.antiFp, fingerprint.isExempt(host, incognito), site)
         if (eff == ProcessLocale.current) return null
         return TzLang.acceptLanguage(eff ?: ProcessLocale.systemTag())
     }
@@ -278,7 +371,7 @@ class BrowserController(
     private fun reloadWithLang(tab: TabState) {
         val v = tab.webView ?: return
         val url = v.url ?: tab.url
-        if (acceptLanguageFor(url) != null) v.loadUrl(url, extraHeaders(url)) else v.reload()
+        if (acceptLanguageFor(url, tab.incognito) != null) v.loadUrl(url, extraHeaders(url, tab.incognito)) else v.reload()
     }
 
     private fun liveWebViews(): List<WebView> = tabs.mapNotNull { it.webView } + listOfNotNull(spare)
@@ -292,6 +385,12 @@ class BrowserController(
     fun setSiteFingerprint(host: String, enabled: Boolean) {
         val site = FpSeed.site(host)
         if (site.isEmpty()) return
+        if (current.incognito) {
+            incogFp = incogFp + (site to enabled)
+            pushIncognitoOverrides()
+            reloadWithLang(current)
+            return
+        }
         val set = if (enabled) fingerprint.exceptions - site else fingerprint.exceptions + site
         fingerprint.update(fingerprint.enabled, fingerprint.strict, set, liveWebViews())
         activity.lifecycleScope.launch { repo.setFpOff(site, !enabled) }
@@ -412,6 +511,13 @@ class BrowserController(
         v.tag = tab
         tab.webView = v
         configureClients(tab, v)
+        if (unisolated.remove(v) != null) {
+            // 隐身标签没隔离成功：不加载任何东西，关掉它并说明原因（不退回"和普通标签共用 Cookie 的隐身"）
+            tab.pendingUrl = null
+            tab.savedState = null
+            main.post { if (tab in tabs) closeTab(tab); incognitoUnavailable() }
+            return v
+        }
 
         // .state 在启动时（IO 线程）或 prefetchDiskStates 里已经读进 savedState，这里不再读文件
         val state = tab.savedState
@@ -421,8 +527,8 @@ class BrowserController(
         val pending = tab.pendingUrl
         tab.pendingUrl = null
         when {
-            pending != null -> v.loadUrl(pending, extraHeaders(pending))
-            !restored && tab.url.isNotBlank() -> v.loadUrl(tab.url, extraHeaders(tab.url))
+            pending != null -> v.loadUrl(pending, extraHeaders(pending, tab.incognito))
+            !restored && tab.url.isNotBlank() -> v.loadUrl(tab.url, extraHeaders(tab.url, tab.incognito))
         }
         tab.canGoBack = v.canGoBack()
         tab.canGoForward = v.canGoForward()
@@ -432,8 +538,10 @@ class BrowserController(
     }
 
     fun newTab(url: String? = null, incognito: Boolean = false) {
+        if (incognito && !WebFeatures.multiProfile) { incognitoUnavailable(); return }
         if (incognito && incognitoProfile == null && WebFeatures.multiProfile) {
             incognitoProfile = WebHardening.INCOGNITO_PREFIX + System.currentTimeMillis()
+            incognitoProfile?.let { ServiceWorkerHook.install(it) }
         }
         val tab = TabState(nextId++, incognito)
         tabs.add(tab)
@@ -452,9 +560,18 @@ class BrowserController(
      * 想再开一个请用标签页里的「新建隐身标签」。
      */
     fun enterIncognito() {
+        if (!WebFeatures.multiProfile) { incognitoUnavailable(); return }
         val existing = tabs.filter { it.incognito }.maxByOrNull { it.lastUsed }
         if (existing != null) switchTo(tabs.indexOf(existing))
         else newTab(incognito = true)
+    }
+
+    /**
+     * 这台设备的 WebView 不支持多 profile：隐身标签没法有自己的 Cookie / 网站存储，会和普通标签共用，
+     * 关掉时也删不掉（只能连普通标签的一起删）。与其给一个"看起来隐身、其实会留痕"的模式，不如直接说明白。
+     */
+    private fun incognitoUnavailable() {
+        Toast.makeText(activity, INCOGNITO_UNAVAILABLE, Toast.LENGTH_LONG).show()
     }
 
     /**
@@ -555,6 +672,7 @@ class BrowserController(
     /** 最后一个隐身标签关掉了：删掉整个隐身 profile（Cookie、缓存、网站存储一起删） */
     private fun endIncognitoSession() {
         incognitoHttpAllowed.clear()
+        incogAdBlock = emptyMap(); incogFp = emptyMap(); incogTz = emptyMap()
         fingerprint.endIncognito()
         val name = incognitoProfile ?: return
         incognitoProfile = null
@@ -583,7 +701,7 @@ class BrowserController(
         tab.loading = true
         tab.progress = 5
         val v = tab.webView
-        if (v != null) v.loadUrl(url, extraHeaders(url)) else tab.pendingUrl = url // 界面显示出来时再创建 WebView 并加载
+        if (v != null) v.loadUrl(url, extraHeaders(url, tab.incognito)) else tab.pendingUrl = url // 界面显示出来时再创建 WebView 并加载
         tab.isHome = false
     }
 
@@ -598,8 +716,8 @@ class BrowserController(
     }
 
     /** 主动加载时带上 DNT / Sec-GPC（网页里点链接、子资源 WebView 不让我们加请求头，靠注入的 JS 信号） */
-    private fun extraHeaders(url: String? = null): Map<String, String> {
-        val al = if (url != null) acceptLanguageFor(url) else null
+    private fun extraHeaders(url: String? = null, incognito: Boolean = false): Map<String, String> {
+        val al = if (url != null) acceptLanguageFor(url, incognito) else null
         return when {
             sec.dntGpc && al != null -> mapOf("DNT" to "1", "Sec-GPC" to "1", "Accept-Language" to al)
             sec.dntGpc -> mapOf("DNT" to "1", "Sec-GPC" to "1")
@@ -621,7 +739,7 @@ class BrowserController(
         tab.warning = null
         tab.upgradedFrom = null
         tab.url = http
-        tab.webView?.loadUrl(http, extraHeaders(http))
+        tab.webView?.loadUrl(http, extraHeaders(http, tab.incognito))
     }
 
     /** 安全提示页上点"返回" */
@@ -632,8 +750,12 @@ class BrowserController(
     }
 
     fun setSiteAdBlock(host: String, enabled: Boolean) {
-        adBlockOff = if (enabled) adBlockOff - host else adBlockOff + host
-        activity.lifecycleScope.launch { repo.setAdBlockOff(host, !enabled) }
+        if (current.incognito) {
+            incogAdBlock = incogAdBlock + (host to enabled)
+        } else {
+            adBlockOff = if (enabled) adBlockOff - host else adBlockOff + host
+            activity.lifecycleScope.launch { repo.setAdBlockOff(host, !enabled) }
+        }
         current.webView?.reload()
     }
 
@@ -728,6 +850,61 @@ class BrowserController(
         }
     }
 
+    // ---------------- 清除本站数据 ----------------
+
+    /**
+     * 盾牌菜单里的「清除本站数据」：这个网站（eTLD+1，含子域名）的 Cookie、网站存储（localStorage / IndexedDB / 缓存存储…）、
+     * 记住的权限和各种例外。隐身标签只动隐身 profile 和内存里的覆盖。HTTP 磁盘缓存 WebView 只能整个清，这里不动。
+     */
+    fun clearSiteData(tab: TabState, host: String) {
+        val site = FpSeed.site(host).ifEmpty { host.lowercase() }
+        if (site.isEmpty()) return
+        val profile = if (tab.incognito) incognitoProfile else null
+        if (tab.incognito && profile == null) return
+        val cm = cookieManagerFor(tab)
+        val storage = WebHardening.webStorage(profile)
+        val path = runCatching { Uri.parse(tab.url).path }.getOrNull()
+        val finish: (List<String>) -> Unit = { origins ->
+            runCatching { val geo = WebHardening.geolocation(profile); origins.forEach { geo.clear(it) } }
+            val hosts = (listOf(host.lowercase(), site, "www.$site") + origins.map { HttpsUpgrade.hostOf(it) })
+                .filter { SiteData.inSite(it, site) }.distinct()
+            ioScope.launch {
+                val n = runCatching { SiteData.clearCookies(cm, hosts, site, path) }.getOrDefault(0)
+                main.post {
+                    toast("已清除 $site 的数据：$n 个 Cookie、${origins.size} 个网站存储 🧽")
+                    tab.webView?.reload()
+                }
+            }
+        }
+        // 设置和例外
+        if (tab.incognito) {
+            incogAdBlock = incogAdBlock.filterKeys { !SiteData.inSite(it, site) }
+            incogFp = incogFp - site
+            incogTz = incogTz - site
+            incognitoHttpAllowed.removeAll { SiteData.inSite(it, site) }
+            pushIncognitoOverrides()
+        } else {
+            adBlockOff = adBlockOff.filterNotTo(HashSet()) { SiteData.inSite(it, site) }
+            httpAllowed = httpAllowed.filterNotTo(HashSet()) { SiteData.inSite(it, site) }
+            sitePerms = sitePerms.filterNot { SiteData.inSite(HttpsUpgrade.hostOf(it.origin), site) }
+            setFpExceptions(fingerprint.exceptions.filterNotTo(HashSet()) { SiteData.inSite(it, site) })
+            if (tzSites.keys.any { SiteData.inSite(it, site) }) setTzLangSites(tzSites.filterKeys { !SiteData.inSite(it, site) })
+            activity.lifecycleScope.launch { repo.clearSiteSettings(site) { SiteData.inSite(it, site) } }
+        }
+        // 网站存储：先列出有存储的来源，删掉属于这个网站的
+        val ok = runCatching {
+            storage.getOrigins { map ->
+                val origins = map?.keys?.mapNotNull { it?.toString() }?.filter { SiteData.originInSite(it, site) }.orEmpty()
+                origins.forEach { o -> runCatching { storage.deleteOrigin(o) } }
+                finish(origins)
+            }
+        }.isSuccess
+        if (!ok) {
+            listOf("https://$host", "http://$host").forEach { o -> runCatching { storage.deleteOrigin(o) } }
+            finish(emptyList())
+        }
+    }
+
     fun onStoragePermissionResult(granted: Boolean) {
         val p = pendingDownload ?: return
         pendingDownload = null
@@ -753,7 +930,12 @@ class BrowserController(
             // 隐身：用独立的 profile（Cookie/缓存/存储都和普通标签分开，结束时整个删掉）。必须是 WebView 的第一个调用
             val profile = incognitoProfile
             val isolated = profile != null && WebHardening.useProfile(wv, profile)
-            if (!isolated) wv.settings.cacheMode = WebSettings.LOAD_NO_CACHE
+            if (!isolated) {
+                // 没能放进独立 profile：这个 WebView 会和普通标签共用 Cookie/存储。一个请求都不让它发，webViewFor 会马上关掉这个标签
+                wv.settings.cacheMode = WebSettings.LOAD_NO_CACHE
+                wv.settings.blockNetworkLoads = true
+                unisolated[wv] = true
+            }
         }
         setupWebView(wv, incognito)
         return wv
@@ -812,7 +994,7 @@ class BrowserController(
     private fun injectCosmetic(view: WebView, tab: TabState, url: String?) {
         if (url == null || !adBlockEnabled || tab.pageAllowlisted) return
         val host = Uri.parse(url).host ?: return
-        if (host in adBlockOff) return
+        if (!siteAdBlockOn(tab, host)) return
         if (tab.cosmeticFor == url) return
         tab.cosmeticFor = url
         val css = AdBlocker.cosmeticCss(url, host) ?: return
@@ -833,7 +1015,7 @@ class BrowserController(
                     val up = upgradeFor(tab, uri.toString())
                     if (up != null) {
                         tab.upgradedFrom = uri.toString()
-                        view.loadUrl(up, extraHeaders(up))
+                        view.loadUrl(up, extraHeaders(up, tab.incognito))
                         return true
                     }
                 }
@@ -844,10 +1026,10 @@ class BrowserController(
                     if (tab.langFixedUrl == target) {
                         tab.langFixedUrl = null
                     } else {
-                        val al = acceptLanguageFor(target)
+                        val al = acceptLanguageFor(target, tab.incognito)
                         if (al != null) {
                             tab.langFixedUrl = target
-                            view.loadUrl(target, extraHeaders(target))
+                            view.loadUrl(target, extraHeaders(target, tab.incognito))
                             return true
                         }
                     }
@@ -875,15 +1057,15 @@ class BrowserController(
                     postBlocked(tab)
                     return null
                 }
-                if (!adBlockEnabled || tab.pageAllowlisted) return null
                 val page = tab.pageHost
-                if (page != null && page in adBlockOff) return null
-                if (AdBlocker.shouldBlock(uri.toString(), host, page, request.requestHeaders["Accept"])) {
+                if (adBlockEnabled && !tab.pageAllowlisted && (page == null || siteAdBlockOn(tab, page)) &&
+                    AdBlocker.shouldBlock(uri.toString(), host, page, request.requestHeaders["Accept"])
+                ) {
                     tab.blocked.incrementAndGet()
                     postBlocked(tab)
                     return AdBlocker.emptyResponse()
                 }
-                return null
+                return workerScriptResponse(request, page ?: host, tab.incognito, cookieManagerFor(tab))
             }
 
             override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
@@ -894,7 +1076,7 @@ class BrowserController(
                     if (up != null) {
                         view.stopLoading()
                         tab.upgradedFrom = url
-                        view.loadUrl(up, extraHeaders(up))
+                        view.loadUrl(up, extraHeaders(up, tab.incognito))
                         return
                     }
                 }
@@ -1067,7 +1249,9 @@ class BrowserController(
     private fun askSitePermission(tab: TabState, rawOrigin: String, perms: List<SitePerm>, done: (Set<SitePerm>) -> Unit) {
         // PermissionRequest 的 Uri 可能带末尾 /，地理位置回调一般不带：统一成 scheme://host[:port] 再比较、再记住
         val origin = UrlUtils.originOf(rawOrigin) ?: rawOrigin.trim().trimEnd('/')
-        val remembered = if (tab.incognito) emptyList() else sitePerms.filter { UrlUtils.originOf(it.origin) == origin }
+        // 明文 http 的来源不记：同一个 http 地址在别的网络（公共 Wi‑Fi）上可能是任何人冒充的，记住的"允许"会白送给它
+        val rememberable = SitePermPolicy.canRemember(origin, tab.incognito)
+        val remembered = if (!rememberable) emptyList() else sitePerms.filter { UrlUtils.originOf(it.origin) == origin }
         val granted = HashSet<SitePerm>()
         val ask = ArrayList<SitePerm>()
         perms.forEach { p ->
@@ -1080,10 +1264,10 @@ class BrowserController(
         val finish: (Set<SitePerm>) -> Unit = { g -> withRuntime(g, done) }
         if (ask.isEmpty()) { finish(granted); return }
         if (permissionPrompt != null) { finish(granted); return } // 已经有一个对话框了：这次默认拒绝
-        permissionPrompt = PermissionPrompt(origin, ask, tab.incognito) { allow, remember ->
+        permissionPrompt = PermissionPrompt(origin, ask, tab.incognito, canRemember = rememberable) { allow, remember ->
             permissionPrompt = null
             if (allow) granted += ask
-            if (remember && !tab.incognito) {
+            if (remember && rememberable) {
                 ask.forEach { p ->
                     sitePerms = listOf(SitePermEntry(origin, p, allow)) + sitePerms.filterNot { UrlUtils.originOf(it.origin) == origin && it.perm == p }
                     activity.lifecycleScope.launch { repo.setSitePerm(origin, p, allow) }
@@ -1168,14 +1352,36 @@ class BrowserController(
     }
 
     private fun startHttpDownload(p: PendingDownload) {
+        // 只走 HTTPS 开着时：明文下载地址同样升级（DownloadManager 不经过 WebView 的拦截）
+        val tab = p.view?.tag as? TabState
+        val url = tab?.let { upgradeFor(it, p.url) } ?: p.url
+        val cm = cookieManagerFor(tab)
+        val cookie = runCatching { cm.getCookie(url) }.getOrNull()
+        if (cookie.isNullOrEmpty()) { enqueueDownload(p, url, url, null); return }
+        // 有 Cookie：先把跳转走一遍，别让 DownloadManager 把这个网站的 Cookie 带到跳转后的别的网站（见 DownloadRedirects）
+        ioScope.launch {
+            val r = DownloadRedirects.resolve(
+                com.yuka.cutebrowser.net.AppHttp.client, url, p.userAgent,
+                cookieFor = { u -> runCatching { cm.getCookie(u) }.getOrNull() },
+                onSetCookie = { u, h -> runCatching { cm.setCookie(u, h) } },
+            )
+            main.post {
+                when {
+                    r == null -> enqueueDownload(p, url, url, null) // 跳转确认不了：不带 Cookie
+                    else -> enqueueDownload(p, r.finalUrl, url, runCatching { cm.getCookie(r.finalUrl) }.getOrNull())
+                }
+            }
+        }
+    }
+
+    /** [nameFrom]：用原始地址取文件名（最终地址常常是一串 CDN 签名） */
+    private fun enqueueDownload(p: PendingDownload, url: String, nameFrom: String, cookie: String?) {
         try {
-            // 只走 HTTPS 开着时：明文下载地址同样升级（DownloadManager 不经过 WebView 的拦截）
-            val url = (p.view?.tag as? TabState)?.let { upgradeFor(it, p.url) } ?: p.url
-            val fileName = Downloads.fileName(url, p.contentDisposition, p.mimeType)
+            val fileName = Downloads.fileName(nameFrom, p.contentDisposition, p.mimeType)
             val req = DownloadManager.Request(Uri.parse(url)).apply {
                 p.mimeType?.let { setMimeType(it) }
                 p.userAgent?.let { addRequestHeader("User-Agent", it) }
-                cookieManagerFor(p.view?.tag as? TabState).getCookie(url)?.let { addRequestHeader("Cookie", it) }
+                if (!cookie.isNullOrEmpty()) addRequestHeader("Cookie", cookie)
                 setTitle(fileName)
                 setDescription("唔姆唔姆正在努力下载中～")
                 setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
@@ -1273,6 +1479,7 @@ class BrowserController(
     private companion object {
         const val MAX_LIVE_WEBVIEWS = 3
         const val BLOB_TIMEOUT_MS = 60_000L
+        const val INCOGNITO_UNAVAILABLE = "这台手机的系统 WebView 版本太旧，隐身标签没法和普通标签分开保存 Cookie，所以先不开隐身啦 🥺 到应用商店更新「Android System WebView」后就能用～"
         val PREWARM_HOSTS = listOf(
             "m.bilibili.com", "www.xiaohongshu.com", "m.weibo.cn", "www.baidu.com", "www.zhihu.com", "m.youtube.com",
         )

@@ -19,7 +19,15 @@ import com.yuka.cutebrowser.data.SecurityPrefs
 /** WebView 能力探测（Robolectric 里会抛异常，所以都包一层） */
 object WebFeatures {
     private fun has(f: String) = runCatching { WebViewFeature.isFeatureSupported(f) }.getOrDefault(false)
-    val multiProfile by lazy { has(WebViewFeature.MULTI_PROFILE) }
+    private val multiProfileDetected by lazy { has(WebViewFeature.MULTI_PROFILE) }
+    val multiProfile: Boolean get() = multiProfileOverride ?: multiProfileDetected
+    /** 只给测试用（Robolectric 里没有真 WebView，探测结果总是 false） */
+    @androidx.annotation.VisibleForTesting
+    @JvmStatic var multiProfileOverride: Boolean? = null
+    /** ServiceWorker 的请求能不能拦（拿来给 http(s) ServiceWorker 脚本加防护） */
+    val serviceWorkerIntercept by lazy {
+        has(WebViewFeature.SERVICE_WORKER_BASIC_USAGE) && has(WebViewFeature.SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST)
+    }
     val documentStartScript by lazy { has(WebViewFeature.DOCUMENT_START_SCRIPT) }
     val uaMetadata by lazy { has(WebViewFeature.USER_AGENT_METADATA) }
     val webMessageListener by lazy { has(WebViewFeature.WEB_MESSAGE_LISTENER) }
@@ -96,6 +104,31 @@ object WebHardening {
         if (profile != null) runCatching { ProfileStore.getInstance().getOrCreateProfile(profile).cookieManager }.getOrNull()
             ?: CookieManager.getInstance()
         else CookieManager.getInstance()
+
+    fun webStorage(profile: String?): android.webkit.WebStorage =
+        if (profile != null) runCatching { ProfileStore.getInstance().getOrCreateProfile(profile).webStorage }.getOrNull()
+            ?: android.webkit.WebStorage.getInstance()
+        else android.webkit.WebStorage.getInstance()
+
+    fun geolocation(profile: String?): android.webkit.GeolocationPermissions =
+        if (profile != null) runCatching { ProfileStore.getInstance().getOrCreateProfile(profile).geolocationPermissions }.getOrNull()
+            ?: android.webkit.GeolocationPermissions.getInstance()
+        else android.webkit.GeolocationPermissions.getInstance()
+
+    /** 给某个 profile（null = 默认）装上 ServiceWorker 请求拦截 */
+    fun setServiceWorkerClient(profile: String?, intercept: (android.webkit.WebResourceRequest) -> android.webkit.WebResourceResponse?): Boolean = runCatching {
+        if (!WebFeatures.serviceWorkerIntercept) return false
+        if (profile == null) {
+            androidx.webkit.ServiceWorkerControllerCompat.getInstance().setServiceWorkerClient(object : androidx.webkit.ServiceWorkerClientCompat() {
+                override fun shouldInterceptRequest(request: android.webkit.WebResourceRequest) = intercept(request)
+            })
+        } else {
+            ProfileStore.getInstance().getOrCreateProfile(profile).serviceWorkerController.setServiceWorkerClient(object : android.webkit.ServiceWorkerClient() {
+                override fun shouldInterceptRequest(request: android.webkit.WebResourceRequest) = intercept(request)
+            })
+        }
+        true
+    }.getOrDefault(false)
 
     /** 必须在 WebView 刚创建、还没做任何事时调用 */
     fun useProfile(wv: WebView, profile: String): Boolean = runCatching {

@@ -335,5 +335,90 @@ class CuteRepository(context: Context) {
         }.getOrDefault(emptyList())
     }
 
+    /**
+     * 「清除本站数据」：去掉这个网站（eTLD+1）相关的记住的权限、拦截/防指纹/时区例外、允许 http 的记录。
+     * [inSite] 判断一个主机名是否属于这个网站。
+     */
+    suspend fun clearSiteSettings(site: String, inSite: (String) -> Boolean) {
+        ds.edit { p ->
+            fun dropHosts(key: Preferences.Key<String>) {
+                val set = decodeSet(p[key])
+                val kept = set.filterNot { inSite(it) }
+                if (kept.size != set.size) p[key] = JSONArray(kept).toString()
+            }
+            dropHosts(Keys.AD_OFF)
+            dropHosts(Keys.HTTP_OK)
+            dropHosts(Keys.FP_OFF)
+            val sites = decodeSites(p[Keys.TZ_SITES])
+            if (sites.keys.any { inSite(it) }) p[Keys.TZ_SITES] = encodeSites(sites.filterKeys { !inSite(it) })
+            val perms = decodePerms(p[Keys.SITE_PERMS])
+            val keptPerms = perms.filterNot { inSite(com.yuka.cutebrowser.security.HttpsUpgrade.hostOf(it.origin)) }
+            if (keptPerms.size != perms.size) p[Keys.SITE_PERMS] = encodePerms(keptPerms)
+        }
+    }
+
+    // ---------------- 备份 / 恢复（v1.7，见 data/Backup.kt） ----------------
+
+    /** 读出要备份的东西（历史只有 [withHistory] 时才读） */
+    suspend fun backupSnapshot(withHistory: Boolean): Backup.Content {
+        val p = dsData.first()
+        val settings = Backup.Settings(
+            theme = p[Keys.THEME],
+            engine = p[Keys.ENGINE],
+            adBlock = p[Keys.ADBLOCK],
+            webDark = p[Keys.WEB_DARK],
+            security = p[Keys.SEC]?.let { runCatching { JSONObject(it) }.getOrNull() },
+            adBlockOff = decodeSet(p[Keys.AD_OFF]),
+            fpOff = decodeSet(p[Keys.FP_OFF]),
+            httpAllowed = decodeSet(p[Keys.HTTP_OK]),
+            tzSites = decodeSites(p[Keys.TZ_SITES]),
+            sitePerms = decodePerms(p[Keys.SITE_PERMS]),
+        )
+        val history = if (withHistory) decode(hsData.first()[Keys.H]) else null
+        return Backup.Content(decode(p[Keys.BOOKMARKS]), history, settings)
+    }
+
+    /** 导入：书签/历史合并去重；设置覆盖（网站名单合并）。返回新加了几个书签、几条历史 */
+    suspend fun applyBackup(c: Backup.Content, bookmarks: Boolean, settings: Boolean, history: Boolean): Pair<Int, Int> {
+        var addedB = 0
+        var addedH = 0
+        ds.edit { p ->
+            if (bookmarks) {
+                val old = decode(p[Keys.BOOKMARKS])
+                val merged = Backup.mergeBookmarks(old, c.bookmarks)
+                addedB = merged.size - old.size
+                p[Keys.BOOKMARKS] = encode(merged)
+            }
+            val s = c.settings
+            if (settings && s != null) {
+                s.theme?.let { t -> if (CuteThemeId.entries.any { it.name == t }) p[Keys.THEME] = t }
+                s.engine?.let { e -> if (SearchEngine.entries.any { it.name == e }) p[Keys.ENGINE] = e }
+                s.adBlock?.let { p[Keys.ADBLOCK] = it }
+                s.webDark?.let { p[Keys.WEB_DARK] = it }
+                s.security?.let { p[Keys.SEC] = encodeSec(decodeSec(it.toString())) } // 过一遍解析：只留认识的字段
+                if (s.adBlockOff.isNotEmpty()) p[Keys.AD_OFF] = JSONArray((decodeSet(p[Keys.AD_OFF]) + s.adBlockOff).toList()).toString()
+                if (s.fpOff.isNotEmpty()) p[Keys.FP_OFF] = JSONArray((decodeSet(p[Keys.FP_OFF]) + s.fpOff).toList()).toString()
+                if (s.httpAllowed.isNotEmpty()) p[Keys.HTTP_OK] = JSONArray((decodeSet(p[Keys.HTTP_OK]) + s.httpAllowed).toList()).toString()
+                if (s.tzSites.isNotEmpty()) p[Keys.TZ_SITES] = encodeSites(decodeSites(p[Keys.TZ_SITES]) + s.tzSites)
+                if (s.sitePerms.isNotEmpty()) {
+                    val cur = decodePerms(p[Keys.SITE_PERMS])
+                    val incoming = s.sitePerms.filter { com.yuka.cutebrowser.browser.SitePermPolicy.canRemember(it.origin, false) }
+                    val keys = incoming.mapTo(HashSet()) { it.origin to it.perm }
+                    p[Keys.SITE_PERMS] = encodePerms(incoming + cur.filterNot { (it.origin to it.perm) in keys })
+                }
+            }
+        }
+        val h = c.history
+        if (history && h != null) {
+            hs.edit { p ->
+                val old = decode(p[Keys.H])
+                val merged = Backup.mergeHistory(old, h, MAX_HISTORY)
+                addedH = merged.count { it !in old }
+                p[Keys.H] = encode(merged)
+            }
+        }
+        return addedB to addedH
+    }
+
     companion object { const val MAX_HISTORY = 500 }
 }

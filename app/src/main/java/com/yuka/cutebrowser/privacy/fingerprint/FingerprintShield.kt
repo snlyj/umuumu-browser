@@ -5,6 +5,7 @@ import android.webkit.WebView
 import androidx.webkit.ScriptHandler
 import androidx.webkit.WebViewCompat
 import com.yuka.cutebrowser.filter.Domains
+import com.yuka.cutebrowser.privacy.locale.SiteTzLang
 import com.yuka.cutebrowser.privacy.locale.SpoofConfig
 import com.yuka.cutebrowser.privacy.locale.TzLang
 import com.yuka.cutebrowser.security.WebFeatures
@@ -39,6 +40,41 @@ class FingerprintShield(private val appContext: Context) {
     @Volatile var spoof: SpoofConfig = SpoofConfig()
         private set
 
+    /**
+     * 隐身标签里在盾牌菜单改的"这个网站防指纹 / 时区语言"：只存在内存里，只对隐身标签生效，结束隐身就丢掉（不落盘）。
+     * fp：site -> 是否防指纹；tz：site -> 覆盖（空的 [SiteTzLang] = 回到跟随全局）
+     */
+    @Volatile var incognitoFp: Map<String, Boolean> = emptyMap()
+        private set
+    @Volatile var incognitoTz: Map<String, SiteTzLang> = emptyMap()
+        private set
+
+    fun exceptionsFor(incognito: Boolean): Set<String> {
+        val o = incognitoFp
+        if (!incognito || o.isEmpty()) return exceptions
+        val out = HashSet(exceptions)
+        o.forEach { (site, on) -> if (on) out.remove(site) else out.add(site) }
+        return out
+    }
+
+    fun spoofFor(incognito: Boolean): SpoofConfig {
+        val o = incognitoTz
+        if (!incognito || o.isEmpty()) return spoof
+        val m = LinkedHashMap(spoof.sites)
+        o.forEach { (site, v) -> if (v.isEmpty) m.remove(site) else m[site] = v }
+        return spoof.copy(sites = m)
+    }
+
+    /** 隐身里改了网站设置：只换隐身 WebView 的脚本 */
+    fun setIncognitoOverrides(fp: Map<String, Boolean>, tz: Map<String, SiteTzLang>, live: Collection<WebView>) {
+        if (fp == incognitoFp && tz == incognitoTz) return
+        incognitoFp = fp
+        incognitoTz = tz
+        val alive = live.toHashSet()
+        views.keys.retainAll(alive)
+        views.forEach { (wv, e) -> if (e.incognito) install(wv, e) }
+    }
+
     /** 要不要往网页里注入脚本：防指纹开着，或时区/语言伪造有内容 */
     val active: Boolean get() = enabled || spoof.hasEffect
 
@@ -55,16 +91,23 @@ class FingerprintShield(private val appContext: Context) {
     /** 后台线程提前把脚本读进内存（9 KB） */
     fun preload() { template.length }
 
-    fun isExempt(host: String?): Boolean = FpSeed.site(host) in exceptions
+    fun isExempt(host: String?, incognito: Boolean = false): Boolean = FpSeed.site(host) in exceptionsFor(incognito)
 
-    fun configJson(incognito: Boolean): String {
+    /**
+     * 拼进脚本的配置。[workerSite] 不为 null 时是给 http(s) Worker 用的（App 在网络层拼到 Worker 脚本前面）：
+     * Worker 里看不到顶层页面，用 ws 告诉脚本按哪个网站算种子/例外。
+     */
+    @Synchronized
+    fun configJson(incognito: Boolean, workerSite: String? = null): String {
         val key = if (incognito) (incognitoKey ?: FpSeed.newKey().also { incognitoKey = it }) else sessionKey
+        val spoof = spoofFor(incognito)
         return JSONObject()
             .put("k", key)
             .put("l", if (!enabled) 0 else if (strict) 2 else 1)
-            .put("x", JSONArray(exceptions.sorted()))
+            .put("x", JSONArray(exceptionsFor(incognito).sorted()))
             .put("p", JSONArray(Domains.SECOND_LEVEL.sorted()))
             .apply {
+                if (workerSite != null) put("ws", workerSite)
                 if (spoof.on) {
                     put("z", spoof.tz)
                     put("g", spoof.lang)
@@ -80,12 +123,17 @@ class FingerprintShield(private val appContext: Context) {
     }
 
     /** 完整脚本；防指纹和时区/语言伪造都没开时返回 null */
-    fun script(incognito: Boolean): String? {
+    fun script(incognito: Boolean): String? = build(incognito, null)
+
+    /** 给 http(s) Worker 脚本拼在最前面的版本（见 [WorkerScripts]）。可以在任意线程调用 */
+    fun workerScript(incognito: Boolean, site: String): String? = build(incognito, site)
+
+    private fun build(incognito: Boolean, workerSite: String?): String? {
         if (!active) return null
         val t = template
         val i = t.lastIndexOf(PLACEHOLDER)
         if (i < 0) return null
-        return t.substring(0, i) + configJson(incognito) + t.substring(i + PLACEHOLDER.length)
+        return t.substring(0, i) + configJson(incognito, workerSite) + t.substring(i + PLACEHOLDER.length)
     }
 
     /** 新建 WebView 时调用（在加载任何网页之前） */
@@ -123,7 +171,12 @@ class FingerprintShield(private val appContext: Context) {
     fun fallbackScript(incognito: Boolean): String? = if (WebFeatures.documentStartScript) null else script(incognito)
 
     /** 隐身会话结束：丢掉隐身密钥，下次隐身是全新的指纹 */
-    fun endIncognito() { incognitoKey = null }
+    @Synchronized
+    fun endIncognito() {
+        incognitoKey = null
+        incognitoFp = emptyMap()
+        incognitoTz = emptyMap()
+    }
 
     companion object {
         const val ASSET = "fingerprint.min.js"

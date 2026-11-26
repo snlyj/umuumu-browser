@@ -189,7 +189,7 @@ fun SecurityWarningPage(tab: TabState, w: SecurityWarning, controller: BrowserCo
 @Composable
 fun PermissionDialog(prompt: PermissionPrompt) {
     val p = LocalCutePalette.current
-    var remember by remember(prompt) { mutableStateOf(!prompt.incognito) }
+    var remember by remember(prompt) { mutableStateOf(prompt.canRemember) }
     Dialog(onDismissRequest = { prompt.onResult(false, false) }) { // 点外面 = 这次拒绝
         Column(
             Modifier
@@ -209,7 +209,7 @@ fun PermissionDialog(prompt: PermissionPrompt) {
             )
             Spacer(Modifier.height(6.dp))
             Text("不认识的网站就点「不给」吧，兔兔会帮你守着 🛡️", color = p.subText, fontSize = 13.sp, textAlign = TextAlign.Center)
-            if (!prompt.incognito) {
+            if (prompt.canRemember) {
                 Spacer(Modifier.height(12.dp))
                 Row(
                     Modifier.clip(RoundedCornerShape(50)).bouncyClick { remember = !remember }.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -255,9 +255,9 @@ fun ShieldChip(tab: TabState, onClick: () -> Unit) {
 fun ShieldDialog(tab: TabState, controller: BrowserController, onDismiss: () -> Unit) {
     val p = LocalCutePalette.current
     val host = UrlUtils.host(tab.url)
-    val siteOn = host !in controller.adBlockOff
+    val siteOn = controller.siteAdBlockOn(tab, host)
     val fpOn = controller.sec.antiFp
-    val fpSiteOn = fpOn && !controller.fingerprint.isExempt(host)
+    val fpSiteOn = fpOn && !controller.siteFpExempt(tab, host)
     Dialog(onDismissRequest = onDismiss) {
         Column(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(30.dp)).background(p.surface).padding(22.dp),
@@ -269,7 +269,7 @@ fun ShieldDialog(tab: TabState, controller: BrowserController, onDismiss: () -> 
             InfoLine(if (tab.isSecure) "🔒" else "⚠️", if (tab.isSecure) "加密连接（https）" else "未加密连接（http），别在这里输入密码哦")
             InfoLine("🧹", if (controller.adBlockEnabled && siteOn) "本页拦下了 ${tab.blockedCount} 个广告/追踪请求" else "这个网站没有开启拦截")
             if (fpOn) InfoLine("🧬", if (fpSiteOn) "防指纹已开启（${if (controller.sec.fpStrict) "严格" else "标准"}）" else "这个网站没有开启防指纹")
-            if (tab.incognito) InfoLine("🎭", "隐身标签：不记历史，关掉后 Cookie 和缓存一起清除")
+            if (tab.incognito) InfoLine("🎭", "隐身标签：不记历史，关掉后 Cookie 和缓存一起清除；在这里改的网站设置也只在这次隐身有效")
             Spacer(Modifier.height(14.dp))
             if (controller.adBlockEnabled && host.isNotBlank()) {
                 ToggleRow("🐰", "在这个网站拦截广告", "网页显示不正常时可以关掉试试", siteOn) {
@@ -290,6 +290,7 @@ fun ShieldDialog(tab: TabState, controller: BrowserController, onDismiss: () -> 
                     onDismiss()
                 }
             }
+            if (host.isNotBlank()) ClearSiteDataRow(tab, host, controller, onDismiss) // v1.7，见 SiteDataUi.kt
         }
     }
 }
