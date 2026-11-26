@@ -77,6 +77,8 @@ class AppearanceTest {
     @Test
     fun repositoryPersistsAppearance() = runBlocking {
         val repo = CuteRepository(app)
+        // DataStore 在测试进程里是单例，先恢复默认（别的测试可能改过）
+        repo.updateAppearance { AppearancePrefs() }
         assertEquals(AppearancePrefs(), repo.appearance.first())
         repo.updateAppearance { it.copy(mascot = Mascot.RIBBON, haptics = true) }
         repo.updateAppearance { it.copy(followSystem = true) }
@@ -85,6 +87,7 @@ class AppearanceTest {
         // 旧版本存的主题名仍然能读（枚举名没改）
         repo.setTheme(CuteThemeId.STARRY)
         assertEquals(CuteThemeId.STARRY, repo.theme.first())
+        repo.updateAppearance { AppearancePrefs() }; repo.setTheme(CuteThemeId.STRAWBERRY)
     }
 
     // ---------------- 主题 ----------------

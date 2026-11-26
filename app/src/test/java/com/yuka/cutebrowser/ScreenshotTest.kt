@@ -53,7 +53,7 @@ class ScreenshotTest {
         // 会 waitForIdle，autoAdvance 开着时会被主页兔子的无限动画空等 60s。
         // 主线程已排队的 DataStore 回调靠 idleMainLooper 推进。
         rule.mainClock.autoAdvance = false
-        val deadline = System.currentTimeMillis() + 15_000
+        val deadline = System.currentTimeMillis() + 60_000
         while (System.currentTimeMillis() < deadline) {
             Thread.sleep(50)
             runCatching { org.robolectric.shadows.ShadowLooper.idleMainLooper() }

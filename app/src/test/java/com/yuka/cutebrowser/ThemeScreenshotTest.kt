@@ -57,6 +57,13 @@ import java.io.File
 
 internal const val THEME_OUT = "../../cute-browser-release/screens/theme"
 
+/** DataStore 在测试进程里是单例：测完把外观和主题恢复成默认，别影响后面跑的测试 */
+internal fun resetAppearance(act: ComponentActivity) = runBlocking {
+    val repo = CuteRepository(act)
+    repo.updateAppearance { AppearancePrefs() }
+    repo.setTheme(CuteThemeId.STRAWBERRY)
+}
+
 private val sampleBookmarks = listOf(
     PageEntry("https://example.com", "小红书 - 你的生活指南", 1),
     PageEntry("https://example.org", "好看的壁纸合集 ✨", 2),
@@ -68,6 +75,8 @@ private val sampleBookmarks = listOf(
 @Config(sdk = [34], qualifiers = "w393dp-h852dp-xhdpi")
 class ThemeScreenshotTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
+
+    @org.junit.After fun reset() { resetAppearance(rule.activity) }
 
     private fun settle(n: Int = 6) {
         rule.mainClock.autoAdvance = false // 吉祥物/进度条有无限循环动画，必须手动推进时钟
@@ -200,6 +209,8 @@ class ThemeScreenshotTest {
 @Config(sdk = [34], qualifiers = "w393dp-h1500dp-xhdpi")
 class AppearanceSectionScreenshotTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
+
+    @org.junit.After fun reset() { resetAppearance(rule.activity) }
 
     private fun section(id: CuteThemeId, update: (AppearancePrefs) -> AppearancePrefs, file: String) {
         val repo = CuteRepository(rule.activity)
