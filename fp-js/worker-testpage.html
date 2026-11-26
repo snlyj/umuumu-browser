@@ -1,0 +1,71 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>umu worker test</title>
+<script>
+// 在页面和各种 Worker 里跑同一段测量代码，比较结果（fp-js/chrome-worker-test.mjs 读 window.__wk）
+const MEASURE = `function measure(){
+  var r = {};
+  r.platform = navigator.platform;
+  r.hc = navigator.hardwareConcurrency;
+  r.lang = navigator.language;
+  r.tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  r.tzo = new Date(0).getTimezoneOffset();
+  try {
+    var c = new OffscreenCanvas(64, 24), x = c.getContext('2d');
+    x.fillStyle = '#f60'; x.fillRect(0, 0, 64, 24); x.fillStyle = '#069'; x.font = '14px sans-serif'; x.fillText('umu 🐰', 2, 16);
+    var d = x.getImageData(0, 0, 64, 24).data, h = 0x811c9dc5;
+    for (var i = 0; i < d.length; i++) { h ^= d[i]; h = Math.imul(h, 0x01000193); }
+    r.canvas = (h >>> 0).toString(16);
+  } catch (e) { r.canvas = 'err ' + e; }
+  r.workerType = typeof Worker;
+  return r;
+}`;
+const W_BODY = MEASURE + `\nvar strictMode = (function(){ return this === undefined; })();\n`;
+const POST = `var m = measure(); m.strict = typeof strictMode !== 'undefined' ? strictMode : null; postMessage(m);`;
+function run(w) {
+  return new Promise((res) => {
+    const t = setTimeout(() => res({ error: 'timeout' }), 5000);
+    w.onmessage = (e) => { clearTimeout(t); res(e.data); };
+    w.onerror = (e) => { clearTimeout(t); res({ error: 'error ' + (e.message || '') }); };
+  });
+}
+function blobUrl(code, type) { return URL.createObjectURL(new Blob([code], { type: type || 'text/javascript' })); }
+(async () => {
+  const out = {};
+  eval(MEASURE);
+  out.page = measure();
+  out.workerCtorToString = Function.prototype.toString.call(Worker);
+  // 1. blob: 经典 Worker，构造后马上 revoke（很常见的写法）
+  { const u = blobUrl(W_BODY + POST); const w = new Worker(u); URL.revokeObjectURL(u); out.blob = await run(w); w.terminate(); }
+  // 2. 'use strict' 开头的 blob Worker：严格模式要保留
+  { const u = blobUrl("'use strict';\n" + W_BODY + POST); const w = new Worker(u); out.blobStrict = await run(w); w.terminate(); }
+  // 3. data: Worker
+  { const w = new Worker('data:text/javascript;charset=utf-8,' + encodeURIComponent(W_BODY + POST)); out.data = await run(w); w.terminate(); }
+  // 4. module blob Worker
+  { const u = blobUrl(W_BODY + POST); const w = new Worker(u, { type: 'module' }); out.module = await run(w); w.terminate(); }
+  // 5. 嵌套：blob Worker 里再开一个 blob Worker
+  {
+    const inner = W_BODY + POST;
+    const outer = `var u = URL.createObjectURL(new Blob([${JSON.stringify(inner)}], {type:'text/javascript'}));
+      var w = new Worker(u); URL.revokeObjectURL(u); w.onmessage = function (e) { postMessage(e.data); };
+      w.onerror = function (e) { postMessage({ error: 'nested ' + e.message }); };`;
+    const w = new Worker(blobUrl(outer)); out.nested = await run(w); w.terminate();
+  }
+  // 6. SharedWorker（blob）：同一个地址连两次，必须连到同一个实例
+  if (typeof SharedWorker === 'function') {
+    const code = MEASURE + `\nvar n = 0; onconnect = function (e) { var p = e.ports[0]; n++; var m = measure(); m.count = n; p.postMessage(m); };`;
+    const u = blobUrl(code);
+    const s1 = new SharedWorker(u), s2 = new SharedWorker(u);
+    const get = (s) => new Promise((res) => { const t = setTimeout(() => res({ error: 'timeout' }), 5000); s.port.onmessage = (e) => { clearTimeout(t); res(e.data); }; s.onerror = () => res({ error: 'error' }); s.port.start(); });
+    const a = await get(s1), b = await get(s2);
+    out.shared = a; out.sharedSecondCount = b.count;
+  }
+  // 7. http(s) Worker：worker-http.js（未处理）和 worker-http-shielded.js（模拟 App 在网络层拼上防护脚本）
+  { const w = new Worker('worker-http.js'); out.http = await run(w); w.terminate(); }
+  { const w = new Worker('worker-http-shielded.js'); out.httpShielded = await run(w); w.terminate(); }
+  // 8. Worker 构造函数行为不变
+  try { Worker('x.js'); out.callWithoutNew = 'no throw'; } catch (e) { out.callWithoutNew = e.constructor.name; }
+  out.instanceOk = (() => { const u = blobUrl('postMessage(1)'); const w = new Worker(u); const ok = w instanceof Worker && Object.getPrototypeOf(w) === Worker.prototype; w.terminate(); return ok; })();
+  window.__wk = out;
+})();
+</script>

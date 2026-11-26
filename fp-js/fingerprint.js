@@ -14,11 +14,15 @@
  *   p  二级公共后缀（co.uk、com.cn…），和 Kotlin 的 Domains 用同一份
  * 每个网站（按顶层页面的 eTLD+1）的种子 = fmix32(FNV-1a(k + "|" + site))，Kotlin 的 FpSeed 有同样的实现（有单元测试对照）。
  */
-(function (C) {
+(function UMU(C) {
   'use strict';
   try {
-    var W = window, L = C.l | 0, STRICT = L >= 2;
+    // 网页里是 window；v1.7 起也会被塞进 Web Worker / SharedWorker / ServiceWorker 的最前面（那里没有 window，用 self）
+    var W = typeof window !== 'undefined' ? window : self, L = C.l | 0, STRICT = L >= 2;
+    var INWORKER = typeof window === 'undefined';
     var O = Object, gopd = O.getOwnPropertyDescriptor, defp = O.defineProperty;
+    // 之后给 Worker 拼脚本要用：网页以后可能改掉这些全局函数，所以现在就把原版拿在手里
+    var FTS = Function.prototype.toString, JSTR = JSON.stringify, RC = Reflect.construct;
 
     // ---------- 哈希 / 伪随机 ----------
     function fnv(s) { var h = 0x811c9dc5; for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); } return h >>> 0; }
@@ -36,10 +40,13 @@
     }
     function hostOf(u) { try { return new URL(u).hostname; } catch (e) { return ''; } }
     var topHost = '';
-    try { topHost = W.top.location.hostname; } catch (e) { }
-    if (!topHost) { try { var ao = W.location.ancestorOrigins; if (ao && ao.length) topHost = hostOf(ao[ao.length - 1]); } catch (e) { } }
+    if (!INWORKER) {
+      try { topHost = W.top.location.hostname; } catch (e) { }
+      if (!topHost) { try { var ao = W.location.ancestorOrigins; if (ao && ao.length) topHost = hostOf(ao[ao.length - 1]); } catch (e) { } }
+    }
     if (!topHost) { try { topHost = W.location.hostname; } catch (e) { } }
-    var SITE = site(topHost);
+    // ws：Worker 里由创建它的页面（或 App）告诉我们顶层网站——Worker 自己的地址（blob:/data:）看不出是哪个网站
+    var SITE = typeof C.ws === 'string' ? C.ws : site(topHost);
     var FPON = L > 0 && (C.x || []).indexOf(SITE) < 0; // L=0：防指纹关了；x：用户给这个网站开了例外
 
     var SEED = mix(fnv(C.k + '|' + SITE));
@@ -91,6 +98,87 @@
       else if (s <= 480) { bs = near(BW, s); bl = near(BH, l); }
       else { bs = Math.max(512, Math.round(s / 64) * 64); bl = Math.max(bs, Math.round(l / 64) * 64); }
       return (scr = land ? [bl, bs] : [bs, bl]);
+    }
+
+    // ---------- Worker 注入 ----------
+    // 给 Worker 用的配置：和本页一样，再加上 ws = 本页的顶层网站（Worker 里每站种子、例外、站点时区都按它算）
+    var WCFG = '';
+    try { var wc = {}; for (var ck in C) if (O.prototype.hasOwnProperty.call(C, ck)) wc[ck] = C[ck]; wc.ws = SITE; WCFG = JSTR(wc); } catch (e) { }
+    var WSRC = null;
+    function workerPrefix() {
+      if (WSRC === null) { try { WSRC = '(' + FTS.call(UMU) + ')(' + WCFG + ');\n'; } catch (e) { WSRC = ''; } }
+      return WSRC;
+    }
+    var STRICT_RE = /^(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*(['"])use strict\1/;
+    /** 在脚本前面拼上防护脚本；保留开头的 'use strict'（拼在后面就不算指令了）和 #! 行 */
+    function withShield(code, module) {
+      var pre = workerPrefix(); if (!pre) return null;
+      code = String(code);
+      if (code.charAt(0) === '#' && code.charAt(1) === '!') code = '//' + code.slice(2);
+      return (!module && STRICT_RE.test(code) ? "'use strict';" : '') + pre + code;
+    }
+    function hookWorkers(w, NM) {
+      var XHR = w.XMLHttpRequest, U = w.URL, B = w.Blob;
+      if (!XHR || !U || !B || !U.createObjectURL) return;
+      var xOpen = XHR.prototype.open, xSend = XHR.prototype.send, xOver = XHR.prototype.overrideMimeType;
+      var xText = gopd(XHR.prototype, 'responseText').get, xStatus = gopd(XHR.prototype, 'status').get;
+      var mkURL = U.createObjectURL, rmURL = U.revokeObjectURL, setT = w.setTimeout, TE = w.TextEncoder, b64 = w.btoa;
+      var shared = new Map();
+      // 同步读出 blob:/data: 里的脚本（内存里的数据，很快；原生 Worker 也是在构造时就把 blob 拿住的，所以网页马上 revoke 也没关系）
+      function readSync(u) {
+        var x = new XHR();
+        xOpen.call(x, 'GET', u, false);
+        xOver.call(x, 'text/plain; charset=utf-8'); // Worker 脚本永远按 UTF-8 解码，这里保持一致
+        xSend.call(x);
+        var st = xStatus.call(x);
+        return st === 200 || st === 0 ? xText.call(x) : null;
+      }
+      function toDataUrl(code) {
+        var bytes = new TE().encode(code), bin = '', CH = 0x8000;
+        for (var i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+        return 'data:text/javascript;base64,' + b64(bin);
+      }
+      // 返回替换后的地址；不需要/做不到就返回 null（照原样创建，绝不因为我们让 Worker 起不来）
+      function rewrite(arg, opts, isShared) {
+        var u = typeof arg === 'string' ? arg : (arg && typeof arg === 'object' ? String(arg) : null);
+        if (!u) return null;
+        var scheme = u.slice(0, 5).toLowerCase();
+        if (scheme !== 'blob:' && scheme !== 'data:') return null; // http(s) 的 Worker 脚本由 App 在网络层处理
+        var module = !!(opts && typeof opts === 'object' && opts.type === 'module');
+        var key = isShared ? u + '\n' + (typeof opts === 'string' ? opts : opts && opts.name) + '\n' + module : null;
+        if (key !== null && shared.has(key)) return shared.get(key);
+        var code = readSync(u); if (code === null) return null;
+        var out = withShield(code, module); if (out === null) return null;
+        var nu;
+        if (scheme === 'data:') {
+          if (!TE || !b64) return null;
+          nu = toDataUrl(out);
+          if (nu.length > 1500000) return null; // URL 太长（上限约 2 MB）会让 Worker 加载失败：宁可不注入
+        } else {
+          nu = mkURL(new B([out], { type: 'text/javascript' }));
+          if (key === null && setT) setT(function () { try { rmURL(nu); } catch (e) { } }, 10000);
+        }
+        if (key !== null) shared.set(key, nu);
+        return nu;
+      }
+      ['Worker', 'SharedWorker'].forEach(function (n) {
+        var K = w[n]; if (typeof K !== 'function') return;
+        var isShared = n === 'SharedWorker';
+        var pk = new Proxy(K, {
+          construct: function (tg, a, nt) {
+            var nu = null;
+            try { if (a.length) nu = rewrite(a[0], a[1], isShared); } catch (e) { nu = null; }
+            if (nu !== null) {
+              var b = []; for (var i = 0; i < a.length; i++) b.push(a[i]); b[0] = nu;
+              try { return RC(tg, b, nt); } catch (e) { } // 比如网页启用了 Trusted Types：退回原样
+            }
+            return RC(tg, a, nt);
+          }
+        });
+        NM.set(pk, K);
+        defp(w, n, { value: pk, writable: true, configurable: true, enumerable: false });
+        var dc = gopd(K.prototype, 'constructor'); if (dc && dc.value === K) { dc.value = pk; defp(K.prototype, 'constructor', dc); }
+      });
     }
 
     function patch(w) {
@@ -220,7 +308,7 @@
       });
 
       // ---------- navigator ----------
-      var N = P('Navigator');
+      var N = P('Navigator') || P('WorkerNavigator');
       V(N, 'hardwareConcurrency', 8);
       V(N, 'deviceMemory', 4);
       V(N, 'platform', 'Linux armv8l');
@@ -309,7 +397,7 @@
 
         // ----- 语言：navigator + Intl 默认 locale -----
         if (LANG) {
-          var N = P('Navigator'), base = LANG.split('-')[0];
+          var N = P('Navigator') || P('WorkerNavigator'), base = LANG.split('-')[0];
           V(N, 'language', LANG);
           V(N, 'languages', function () { return LANGS || (LANGS = O.freeze(base === LANG ? [LANG] : [LANG, base])); });
           if (I) ['NumberFormat', 'Collator', 'PluralRules', 'RelativeTimeFormat', 'ListFormat', 'DisplayNames', 'Segmenter', 'DurationFormat'].forEach(function (n) {
@@ -474,6 +562,9 @@
           });
         });
       } catch (e) { }
+
+      // ---------- Worker：blob: / data: 的 Worker 不经过 App 的网络拦截，在这里把同一份脚本拼到它最前面 ----------
+      try { hookWorkers(w, NM); } catch (e) { }
 
       // ---------- iframe：同源子窗口在网页拿到之前先打补丁 ----------
       function sub_(cw) { try { if (cw && cw !== w) patch(cw); } catch (e) { } return cw; }
