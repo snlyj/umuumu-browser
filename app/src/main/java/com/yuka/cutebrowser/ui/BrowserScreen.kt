@@ -112,7 +112,10 @@ fun BrowserScreen(controller: BrowserController, repo: CuteRepository, protectio
                 // 状态栏 + 导航栏 + 键盘 + 刘海/挖孔（横屏时在左右两侧）
                 .windowInsetsPadding(WindowInsets.safeDrawing),
         ) {
-            AddressBar(
+            val find = controller.features.find
+            if (find.open && find.tabId == tab.id) {
+                FindBar(find, onQuery = { controller.features.search(it) }, onNext = { controller.features.findNext(it) }, onClose = { controller.features.closeFind() })
+            } else AddressBar(
                 tab = tab,
                 isBookmarked = isBookmarked,
                 onSubmit = { controller.submit(it) },

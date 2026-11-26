@@ -59,6 +59,7 @@ import com.yuka.cutebrowser.privacy.locale.SpoofConfig
 import com.yuka.cutebrowser.privacy.locale.TzLang
 import com.yuka.cutebrowser.data.SitePerm
 import com.yuka.cutebrowser.data.SitePermEntry
+import com.yuka.cutebrowser.features.PageFeatures
 import com.yuka.cutebrowser.security.HttpsUpgrade
 import com.yuka.cutebrowser.security.WebFeatures
 import com.yuka.cutebrowser.security.WebHardening
@@ -187,6 +188,8 @@ class BrowserController(
         private set
 
     val downloads = Downloads(activity.applicationContext, repo)
+    /** v1.7 常用功能：查找、阅读模式、翻译、桌面版、添加到主屏幕（见 features/） */
+    val features = PageFeatures(activity, this)
     /** 防指纹（脚本注入 + 每站种子），见 privacy/fingerprint */
     val fingerprint = FingerprintShield(activity.applicationContext)
     private val session = SessionStore(activity.applicationContext)
@@ -478,6 +481,7 @@ class BrowserController(
 
     private fun touch(tab: TabState) {
         tab.lastUsed = SystemClock.uptimeMillis()
+        features.onCurrentTabChanged(tab)
         trimLiveWebViews(MAX_LIVE_WEBVIEWS)
     }
 
@@ -825,6 +829,7 @@ class BrowserController(
     }
 
     private fun configureClients(tab: TabState, wv: WebView) {
+        features.onWebViewCreated(tab, wv)
         wv.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val uri = request.url
@@ -900,6 +905,7 @@ class BrowserController(
                 }
                 tab.loading = true
                 tab.cosmeticFor = null
+                features.onPageStarted(tab)
                 if (pendingBlobs.isNotEmpty()) purgeBlobs(view) // 页面跳走了：这页发起的 blob 下载作废
                 if (url != null) {
                     tab.url = url
@@ -925,6 +931,7 @@ class BrowserController(
                 val u = url ?: return
                 tab.url = u
                 injectCosmetic(view, tab, u)
+                features.onPageFinished(tab, view)
                 if (tab.incognito) return // 隐身：不记历史
                 val title = view.title.orEmpty()
                 if (tab.webView === view) activity.lifecycleScope.launch { repo.addHistory(u, title) }

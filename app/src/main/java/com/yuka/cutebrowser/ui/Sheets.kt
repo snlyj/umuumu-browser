@@ -147,6 +147,7 @@ fun CuteSheets(
                     onDownloads = { onChange(SheetType.Downloads) },
                     onShare = { controller.shareCurrent(); close() },
                     onSettings = { onChange(SheetType.Settings) },
+                    tools = featureTools(controller, close),
                 )
                 SheetType.Tabs -> TabsSheet(controller, close)
                 SheetType.Bookmarks -> EntryListSheet(
@@ -218,6 +219,7 @@ private fun MenuSheet(
     onDownloads: () -> Unit,
     onShare: () -> Unit,
     onSettings: () -> Unit,
+    tools: List<ToolTile> = emptyList(),
 ) {
     val p = LocalCutePalette.current
     SheetHeader("唔姆菜单", "🎀")
@@ -232,7 +234,7 @@ private fun MenuSheet(
         MenuTile("下载", CuteIcons.Download, onDownloads),
         MenuTile("分享", CuteIcons.Share, onShare),
         MenuTile("设置", CuteIcons.Flower, onSettings),
-    )
+    ) + tools.map { MenuTile(it.label, it.icon, it.action, it.checked) }
     val bgs = listOf(p.pink, p.lavender, p.mint)
     tiles.chunked(4).forEachIndexed { r, row ->
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
