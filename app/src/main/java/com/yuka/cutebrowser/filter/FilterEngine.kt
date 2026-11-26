@@ -26,6 +26,23 @@ object ResType {
 
     /** 从 URL 后缀和 Accept 头猜资源类型（shouldInterceptRequest 里拿不到真正的类型） */
     fun infer(url: String, accept: String?): Int {
+        val byUrl = inferByUrl(url)
+        return if (byUrl != UNDECIDED) byUrl else inferByAccept(url, accept)
+    }
+
+    /**
+     * 同 [infer]，但 Accept 头用到才去取：WebResourceRequest.requestHeaders 每次调用都会新建一个 Map，
+     * 而大多数子资源（.js/.css/.png/.woff2…）光看后缀就能定类型，用不着。
+     */
+    inline fun infer(url: String, accept: () -> String?): Int {
+        val byUrl = inferByUrl(url)
+        return if (byUrl != UNDECIDED) byUrl else inferByAccept(url, accept())
+    }
+
+    const val UNDECIDED = -1
+
+    /** 只看后缀；看不出来返回 [UNDECIDED] */
+    fun inferByUrl(url: String): Int {
         var end = url.length
         val q = url.indexOf('?'); if (q >= 0) end = q
         val h = url.indexOf('#'); if (h in 0 until end) end = h
@@ -41,6 +58,10 @@ object ResType {
                 else -> if (ext == "html" || ext == "htm") return SUBDOC
             }
         }
+        return UNDECIDED
+    }
+
+    fun inferByAccept(url: String, accept: String?): Int {
         if (accept != null) {
             if (accept.startsWith("text/css")) return STYLESHEET
             if (accept.startsWith("image/")) return IMAGE

@@ -102,4 +102,20 @@ class FilterLoadPerfTest {
         assertEquals(0, wrong.get())
         if (Runtime.getRuntime().availableProcessors() >= 4) assertTrue("matching seems serialised: $ratio", ratio < 3.0)
     }
+
+    @Test
+    fun acceptHeaderIsOnlyReadWhenTheExtensionCannotDecide() {
+        var calls = 0
+        val acc = { calls++; "text/css,*/*" }
+        for (u in listOf("https://a.com/x.js", "https://a.com/x.css?v=1", "https://a.com/i.png#frag", "https://a.com/f.woff2", "https://a.com/v.mp4", "https://a.com/p.html")) {
+            ResType.infer(u, acc)
+        }
+        assertEquals("后缀能定类型的请求不该去取 Accept 头", 0, calls)
+        assertEquals(ResType.STYLESHEET, ResType.infer("https://a.com/style", acc)) // 没后缀：才读 Accept
+        assertEquals(1, calls)
+        // 和原来的写法结果一致
+        for (u in listOf("https://a.com/x.js", "https://a.com/api/data", "wss://a.com/socket", "https://a.com/")) {
+            assertEquals(ResType.infer(u, "image/avif"), ResType.infer(u) { "image/avif" })
+        }
+    }
 }

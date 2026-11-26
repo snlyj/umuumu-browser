@@ -141,7 +141,11 @@ object AdBlocker {
     internal fun resetForTest() { engine = null; started = false }
 
     /** 子资源请求要不要拦（任意线程）。url 原样传入即可 */
-    fun shouldBlock(url: String, host: String, pageHost: String?, accept: String?): Boolean {
+    fun shouldBlock(url: String, host: String, pageHost: String?, accept: String?): Boolean =
+        shouldBlock(url, host, pageHost) { accept }
+
+    /** [accept]：只有后缀判断不出资源类型时才会调用（见 [ResType.infer]） */
+    inline fun shouldBlock(url: String, host: String, pageHost: String?, accept: () -> String?): Boolean {
         val e = engine ?: return isBlockedHost(host)
         // shouldInterceptRequest 在 WebView 的后台线程里调用：这里抛异常会让整个 App 崩掉，所以任何意外都当"不拦"
         return try {

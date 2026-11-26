@@ -988,7 +988,7 @@ class BrowserController(
                 if (!adBlockEnabled || tab.pageAllowlisted) return null
                 val page = tab.pageHost
                 if (page != null && page in adBlockOff) return null
-                if (AdBlocker.shouldBlock(uri.toString(), host, page, request.requestHeaders["Accept"])) {
+                if (AdBlocker.shouldBlock(uri.toString(), host, page) { request.requestHeaders["Accept"] }) {
                     tab.blocked.incrementAndGet()
                     postBlocked(tab)
                     return AdBlocker.emptyResponse()
