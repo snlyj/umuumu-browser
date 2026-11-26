@@ -7,6 +7,14 @@ plugins {
     id("io.github.takahirom.roborazzi")
 }
 
+// 看 Compose 稳定性/可跳过报告：./gradlew assembleRelease -PcomposeReports（输出到 app/build/compose-reports）
+if (project.hasProperty("composeReports")) {
+    extensions.configure<org.jetbrains.kotlin.compose.compiler.gradle.ComposeCompilerGradlePluginExtension> {
+        reportsDestination.set(layout.buildDirectory.dir("compose-reports"))
+        metricsDestination.set(layout.buildDirectory.dir("compose-reports"))
+    }
+}
+
 android {
     namespace = "com.yuka.cutebrowser"
     compileSdk = 35

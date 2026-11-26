@@ -1,8 +1,12 @@
 package com.yuka.cutebrowser.browser
 
 import android.content.Context
+import android.os.Build
+import android.os.Process
 import android.os.SystemClock
 import android.util.Log
+import com.yuka.cutebrowser.perf.StartupMarks
+import com.yuka.cutebrowser.perf.section
 import android.webkit.WebResourceResponse
 import com.yuka.cutebrowser.filter.FilterEngine
 import com.yuka.cutebrowser.filter.FilterRequest
@@ -53,18 +57,54 @@ object AdBlocker {
     @Volatile var loadInfo: String = "加载中…"
         private set
 
+    @Volatile private var started = false
+
+    /**
+     * 在后台线程开始加载过滤引擎（只会启动一次，可以重复调用）。放在 Application.onCreate 里最早调用：
+     * 这样规则的读取和 Activity 创建 / 主题 / 设置读取并行，第一个网页开始加载时引擎大概率已经就绪。
+     *
+     * 线程优先级：不用 THREAD_PRIORITY_BACKGROUND（≥10 会被系统放进后台 cgroup，只能跑在小核上、
+     * 前台忙的时候只给很少的 CPU，加载反而更慢），用略低于主线程的 +2，仍然可以用大核。
+     */
+    fun preload(context: Context) {
+        synchronized(this) { if (started) return; started = true }
+        val app = context.applicationContext
+        Thread({
+            runCatching { Process.setThreadPriority(PRELOAD_PRIORITY) }
+            runCatching { load(app, cacheKey(app)) }.onFailure { Log.w(TAG, "preload failed", it) }
+        }, "umu-filter").start()
+    }
+
+    private const val PRELOAD_PRIORITY = 2
+
+    /** 编译缓存的文件名里带版本 + 安装时间：App 更新（规则也可能变了）后会重新编译一次 */
+    fun cacheKey(context: Context): String = runCatching {
+        val pi = context.packageManager.getPackageInfo(context.packageName, 0)
+        @Suppress("DEPRECATION")
+        val vc = if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode else pi.versionCode.toLong()
+        "$vc-${pi.lastUpdateTime}"
+    }.getOrDefault("0")
+
     /** 必须在后台线程调用。加了锁：Activity 重建时会再起一个加载线程，别让两个线程同时编译一遍 */
     @Synchronized
-    fun load(context: Context, cacheKey: String) {
-        if (engine != null) return
+    fun load(context: Context, cacheKey: String) = section("AdBlocker.load") {
+        if (engine != null) return@section
         val t0 = SystemClock.elapsedRealtime()
         val dir = File(context.filesDir, "filters").apply { mkdirs() }
         val cache = File(dir, "compiled-$cacheKey.bin")
         var e: FilterEngine? = null
         var fromCache = false
         if (cache.exists()) {
-            e = runCatching { DataInputStream(BufferedInputStream(cache.inputStream(), 1 shl 16)).use { FilterEngine.readFrom(it) } }
-                .onFailure { Log.w(TAG, "cache read failed", it) }.getOrNull()
+            // 网络规则读完就先发布（能拦请求了），元素隐藏规则随后再就位
+            e = runCatching {
+                DataInputStream(BufferedInputStream(cache.inputStream(), 1 shl 16)).use { ins ->
+                    FilterEngine.readFrom(ins) { early ->
+                        loadedCount = early.networkRuleCount
+                        engine = early
+                        StartupMarks.mark("filterNetworkReady")
+                    }
+                }
+            }.onFailure { Log.w(TAG, "cache read failed", it) }.getOrNull()
             fromCache = e != null
         }
         if (e == null) {
@@ -93,11 +133,12 @@ object AdBlocker {
         Log.i(TAG, "filter engine ready: ${e.networkRuleCount} network / ${e.cosmeticRuleCount} cosmetic rules, $loadInfo")
         loadedCount = e.networkRuleCount + e.cosmeticRuleCount
         engine = e
+        StartupMarks.mark("filterReady")
     }
 
     /** 只给单元测试用：丢掉已加载的引擎，强制重新加载 */
     @androidx.annotation.VisibleForTesting
-    internal fun resetForTest() { engine = null }
+    internal fun resetForTest() { engine = null; started = false }
 
     /** 子资源请求要不要拦（任意线程）。url 原样传入即可 */
     fun shouldBlock(url: String, host: String, pageHost: String?, accept: String?): Boolean {

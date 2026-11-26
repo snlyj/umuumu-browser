@@ -42,6 +42,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.WebSettingsCompat
@@ -91,6 +93,9 @@ class TabState(val id: Long, val incognito: Boolean = false) {
     var lastUsed = 0L
     /** 上次渲染进程崩溃的时间（防止崩溃后自动重载又崩的死循环） */
     var lastCrashAt = -CRASH_LOOP_MS
+
+    /** 标签页列表里的缩略图（小图，见 perf/Thumbnails；隐身标签不截图；内存紧张时会被清掉） */
+    var thumb by mutableStateOf<ImageBitmap?>(null)
 
     var url by mutableStateOf("")
     var title by mutableStateOf("新标签页")
@@ -400,15 +405,57 @@ class BrowserController(
         if (incognitoProfile == null && WebFeatures.multiProfile) {
             WebHardening.leftoverIncognitoProfiles().forEach { WebHardening.deleteProfile(it) }
         }
-        activity.lifecycleScope.launch(Dispatchers.IO) {
-            DohManager.prewarm(PREWARM_HOSTS) // 开着加密 DNS 就走 DoH 预热，不然用系统 DNS
+        warmHosts(PREWARM_HOSTS) // 开着加密 DNS 就走 DoH 预热，不然用系统 DNS
+    }
+
+    private val warmer = HostWarmer { hosts ->
+        ioScope.launch {
+            // 隐私：用着 HTTP 代理（比如 Clash）又没开加密 DNS 时，网页的域名是交给代理去解析的；
+            // 这里再用系统 DNS 解析一遍，等于把你要去的网站告诉了本地的 DNS 服务器，所以这种情况不预热。
+            val proxied = runCatching { com.yuka.cutebrowser.dns.SystemHttpProxy.current(activity) != null }.getOrDefault(false)
+            if (proxied && !DohManager.status.value.active) return@launch
+            DohManager.prewarm(hosts)
+        }
+    }
+
+    /** 把可能马上要打开的网站的 DNS 提前解析好（见 [HostWarmer]）。任意线程、可以反复调用 */
+    fun warmHosts(hosts: List<String>) { warmer.warmAll(hosts) }
+
+    /** 地址栏拿到焦点：预热当前搜索引擎的域名（输入后回车，第一个请求不用再等解析） */
+    fun warmSearchEngine() { warmer.warm(engine.searchUrl("a")) }
+
+    /** 地址栏里的内容在变：像网址就预热它的域名 */
+    fun warmTyped(input: String) { UrlUtils.asDirectUrl(input)?.let { warmer.warm(it) } }
+
+    /** 单元测试用：当前活着的 WebView 数 / 有没有备用 WebView */
+    internal val liveWebViewCount: Int get() = tabs.count { it.webView != null }
+    internal val hasSpare: Boolean get() = spare != null
+
+    private var spareScheduled = false
+    private var memoryTight = false
+    /** 备用 WebView 是因为内存/切后台被丢掉的：回到前台时要补回来（启动时那次预热由首帧之后的 [prewarm] 负责） */
+    private var spareDropped = false
+
+    /**
+     * 备用 WebView 被用掉之后，等主线程空闲再补一个：下一次"新标签打开网页"不用在点击的那一刻同步创建 WebView（几十毫秒的卡顿）。
+     * 活着的 WebView 已经到上限、内存紧张、或 Activity 已经在销毁时不补。
+     */
+    private fun scheduleSpare() {
+        if (spareScheduled || memoryTight) return
+        spareScheduled = true
+        Looper.myQueue().addIdleHandler {
+            spareScheduled = false
+            if (spare == null && !memoryTight && !activity.isFinishing && !activity.isDestroyed &&
+                tabs.count { it.webView != null } < MAX_LIVE_WEBVIEWS
+            ) spare = com.yuka.cutebrowser.perf.section("spare.create") { createWebView(false) }
+            false
         }
     }
 
     /** 给标签页拿 WebView（没有就创建并恢复状态）。必须在主线程调用。 */
     fun webViewFor(tab: TabState): WebView {
         tab.webView?.let { return it }
-        val v = (if (!tab.incognito) spare?.also { spare = null } else null) ?: createWebView(tab.incognito)
+        val v = (if (!tab.incognito) spare?.also { spare = null; scheduleSpare() } else null) ?: createWebView(tab.incognito)
         v.tag = tab
         tab.webView = v
         configureClients(tab, v)
@@ -517,8 +564,69 @@ class BrowserController(
 
     /** 系统内存紧张：回收后台标签的 WebView 和预热的备用 WebView */
     fun onLowMemory() {
-        spare?.let { disposeWebView(it) }; spare = null
+        memoryTight = true
+        dropSpare()
         trimLiveWebViews(1)
+        clearThumbs(keepCurrent = false)
+    }
+
+    /**
+     * onTrimMemory 的分级处理（level 见 ComponentCallbacks2）：
+     * - UI_HIDDEN（App 不可见了）：丢掉备用 WebView（回来时在空闲时补），缩略图只留最近用过的几张；
+     * - RUNNING_MODERATE：同上，并且在系统恢复正常之前不再补备用 WebView；
+     * - RUNNING_LOW / CRITICAL、BACKGROUND 及更高（进程可能被杀）：后台标签的 WebView 只留当前这个，缩略图全清。
+     */
+    @Suppress("DEPRECATION")
+    fun onTrimMemory(level: Int) {
+        when {
+            level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND ||
+                level == android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW ||
+                level == android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> onLowMemory()
+            level == android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE -> {
+                memoryTight = true
+                dropSpare()
+                clearThumbs(keepCurrent = true)
+            }
+            level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> {
+                dropSpare()
+                clearThumbs(keepCurrent = true)
+            }
+        }
+    }
+
+    private fun dropSpare() {
+        val s = spare ?: return
+        spare = null
+        spareDropped = true
+        disposeWebView(s)
+    }
+
+    private fun clearThumbs(keepCurrent: Boolean) {
+        val cur = tabs.getOrNull(currentIndex)
+        tabs.forEach { if (!keepCurrent || it !== cur) it.thumb = null }
+    }
+
+    /** 缩略图只保留最近用过的 [com.yuka.cutebrowser.perf.Thumbnails.MAX_KEPT] 张 */
+    private fun trimThumbs() {
+        val withThumb = tabs.filter { it.thumb != null }
+        val extra = withThumb.size - com.yuka.cutebrowser.perf.Thumbnails.MAX_KEPT
+        if (extra > 0) withThumb.sortedBy { it.lastUsed }.take(extra).forEach { it.thumb = null }
+    }
+
+    /**
+     * 打开标签页列表之前调用：把当前网页截一张小图（PixelCopy，不在主线程重绘页面）。
+     * 隐身标签、首页、开了防截屏、WebView 不在屏幕上时不截。
+     */
+    fun captureThumbnail() {
+        val tab = tabs.getOrNull(currentIndex) ?: return
+        val v = tab.webView ?: return
+        if (tab.incognito || tab.isHome || tab.warning != null) return
+        com.yuka.cutebrowser.perf.Thumbnails.capture(activity, v) { bmp ->
+            if (bmp != null && tab in tabs && !tab.incognito) {
+                tab.thumb = bmp.asImageBitmap()
+                trimThumbs()
+            }
+        }
     }
 
     /** 主题切换时：网页深色模式变了就重建所有 WebView（状态保存后恢复） */
@@ -696,6 +804,8 @@ class BrowserController(
     }
 
     fun onHostResume() {
+        memoryTight = false // 回到前台：系统已经让出内存
+        if (spareDropped) { spareDropped = false; scheduleSpare() }
         tabs.firstNotNullOfOrNull { it.webView }?.resumeTimers()
         val cur = tabs.getOrNull(currentIndex)
         if (cur != null && !cur.isHome) cur.webView?.onResume()

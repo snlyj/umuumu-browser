@@ -66,6 +66,7 @@ import com.yuka.cutebrowser.browser.BrowserController
 import com.yuka.cutebrowser.browser.TabState
 import com.yuka.cutebrowser.data.CuteRepository
 import com.yuka.cutebrowser.ui.theme.LocalCutePalette
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 enum class SheetType { None, Menu, Tabs, Bookmarks, History, Downloads, Settings, Security, SitePerms }
@@ -119,6 +120,8 @@ fun BrowserScreen(controller: BrowserController, repo: CuteRepository, protectio
                 onToggleBookmark = toggleBookmark,
                 onRefresh = { controller.reloadOrStop() },
                 onShield = { shield = true },
+                onFocus = { controller.warmSearchEngine() },
+                onTyping = { controller.warmTyped(it) },
             )
             if (tab.isHome) CopiedLinkBanner(onOpen = { controller.open(it) })
             BunnyProgressBar(progress = { tab.progress }, visible = { tab.loading && !tab.isHome })
@@ -155,7 +158,8 @@ fun BrowserScreen(controller: BrowserController, repo: CuteRepository, protectio
                     onBack = { controller.back() },
                     onForward = { controller.forward() },
                     onHome = { controller.goHome() },
-                    onTabs = { sheet = SheetType.Tabs },
+                    // 先截一张当前网页的小图（异步，不卡界面），列表里显示
+                    onTabs = { controller.captureThumbnail(); sheet = SheetType.Tabs },
                     onMenu = { sheet = SheetType.Menu },
                 )
             }
@@ -186,6 +190,8 @@ private fun AddressBar(
     onToggleBookmark: () -> Unit,
     onRefresh: () -> Unit,
     onShield: () -> Unit,
+    onFocus: () -> Unit = {},
+    onTyping: (String) -> Unit = {},
 ) {
     val p = LocalCutePalette.current
     val focusManager = LocalFocusManager.current
@@ -195,6 +201,14 @@ private fun AddressBar(
 
     LaunchedEffect(tab.id, tab.url, tab.isHome, focused) {
         if (!focused) text = TextFieldValue(if (tab.isHome) "" else tab.url)
+    }
+
+    // 输入时稍等一下（停手 250ms）再预热：像网址就把它的域名先解析好；每次按键不会触发任何网络活动
+    LaunchedEffect(text.text, focused) {
+        if (focused && text.text.isNotBlank()) {
+            delay(250)
+            onTyping(text.text)
+        }
     }
 
     Row(
@@ -246,6 +260,7 @@ private fun AddressBar(
                         .onFocusChanged {
                             if (it.isFocused && !focused) {
                                 text = text.copy(selection = TextRange(0, text.text.length))
+                                onFocus()
                             }
                             focused = it.isFocused
                         },

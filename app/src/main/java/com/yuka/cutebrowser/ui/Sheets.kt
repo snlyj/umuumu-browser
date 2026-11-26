@@ -7,7 +7,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.layout.ContentScale
+import com.yuka.cutebrowser.browser.TabState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -311,7 +314,7 @@ private fun TabsSheet(controller: BrowserController, close: () -> Unit) {
                     .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(if (t.incognito) "🎭" else if (t.isHome) "🏡" else "🌐", fontSize = 22.sp)
+                TabThumb(t)
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(t.displayTitle, color = if (t.incognito) Color(0xFFF1E8FF) else p.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -323,6 +326,24 @@ private fun TabsSheet(controller: BrowserController, close: () -> Unit) {
                     Icon(CuteIcons.Close, "关闭", tint = p.accent, modifier = Modifier.size(16.dp))
                 }
             }
+        }
+    }
+}
+
+/** 标签页的小图标：有缩略图就显示缩略图（已经缩好的小位图，直接画），没有就用 emoji */
+@Composable
+private fun TabThumb(t: TabState) {
+    val thumb = if (t.incognito || t.isHome) null else t.thumb
+    if (thumb != null) {
+        Image(
+            bitmap = thumb,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.size(width = 56.dp, height = 40.dp).clip(RoundedCornerShape(10.dp)),
+        )
+    } else {
+        Box(Modifier.size(width = 56.dp, height = 40.dp), contentAlignment = Alignment.Center) {
+            Text(if (t.incognito) "🎭" else if (t.isHome) "🏡" else "🌐", fontSize = 22.sp)
         }
     }
 }

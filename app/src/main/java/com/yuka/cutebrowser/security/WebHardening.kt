@@ -74,7 +74,8 @@ object WebHardening {
             wv.importantForAutofill = if (sec.autofill) View.IMPORTANT_FOR_AUTOFILL_AUTO else View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         }
         if (sec.genericUa) {
-            val def = runCatching { WebSettings.getDefaultUserAgent(wv.context) }.getOrNull() ?: wv.settings.userAgentString
+            val def = com.yuka.cutebrowser.perf.WebViewWarmup.defaultUserAgent
+                ?: runCatching { WebSettings.getDefaultUserAgent(wv.context) }.getOrNull() ?: wv.settings.userAgentString
             wv.settings.userAgentString = UserAgents.generic(def)
             runCatching {
                 if (WebFeatures.uaMetadata) {

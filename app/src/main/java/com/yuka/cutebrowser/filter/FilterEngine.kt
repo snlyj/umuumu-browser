@@ -125,9 +125,12 @@ class NetRule(
 
 /** 一组规则（拦截规则或例外规则），按 host / token 建索引 */
 class RuleSet {
-    val plainHosts = HashSet<String>()                  // ||host^ 且没有任何选项（最常见，最快）
-    val hostRules = HashMap<String, ArrayList<NetRule>>() // ||host^$选项
-    val tokenRules = HashMap<String, ArrayList<NetRule>>()
+    var plainHosts = HashSet<String>()                  // ||host^ 且没有任何选项（最常见，最快）
+        internal set
+    var hostRules = HashMap<String, ArrayList<NetRule>>() // ||host^$选项
+        internal set
+    var tokenRules = HashMap<String, ArrayList<NetRule>>()
+        internal set
     val noToken = ArrayList<NetRule>()
     var size = 0
 
@@ -163,8 +166,9 @@ class FilterEngine {
     private val important = RuleSet()
     private val docAllow = RuleSet()     // @@...$document：整个页面不拦截
     private val elemhideAllow = RuleSet() // @@...$elemhide
-    private val hide = HashMap<String, ArrayList<String>>()
-    private val hideExcept = HashMap<String, HashSet<String>>()
+    // 元素隐藏规则：从缓存读时放在网络规则之后、晚一点再就位（见 readFrom 的 onNetworkReady），所以是 volatile 整体替换
+    @Volatile private var hide = HashMap<String, ArrayList<String>>()
+    @Volatile private var hideExcept = HashMap<String, HashSet<String>>()
 
     val networkRuleCount: Int get() = block.size + allow.size + important.size + docAllow.size + elemhideAllow.size
     val cosmeticRuleCount: Int get() = hide.values.sumOf { it.size }
@@ -185,6 +189,8 @@ class FilterEngine {
 
     /** 给某个网站的元素隐藏 CSS（没有就返回 null） */
     fun cosmeticCss(pageUrl: String, pageHost: String): String? {
+        val hide = hide
+        val hideExcept = hideExcept
         if (hide.isEmpty()) return null
         val req = FilterRequest(pageUrl, pageHost, pageHost, ResType.UNKNOWN)
         if (elemhideAllow.find(req, tokenize(pageUrl))) return null
@@ -500,30 +506,51 @@ class FilterEngine {
             }
         }
 
-        fun readFrom(inp: DataInputStream): FilterEngine? {
+        /** 容量：装 n 个元素刚好不用扩容（HashMap 默认负载因子 0.75） */
+        internal fun capacityFor(n: Int): Int = if (n < 3) 4 else (n / 0.75f).toInt() + 1
+
+        /**
+         * 读二进制缓存。[onNetworkReady]：网络规则（拦截判断用的那部分）读完就调用，这时元素隐藏规则还没读，
+         * 引擎已经能拦请求了，调用方可以先把它发布出去；元素隐藏规则读完后再整体换进来（cosmeticCss 在那之前返回 null）。
+         */
+        fun readFrom(inp: DataInputStream, onNetworkReady: ((FilterEngine) -> Unit)? = null): FilterEngine? {
             if (inp.readInt() != CACHE_MAGIC) return null
             val e = FilterEngine()
             for (set in listOf(e.block, e.allow, e.important, e.docAllow, e.elemhideAllow)) {
                 set.size = inp.readInt()
-                repeat(inp.readInt()) { set.plainHosts.add(inp.readUTF()) }
-                repeat(inp.readInt()) {
+                // 每个表前面都有条目数：按数量一次开够桶，读几万条时不用反复 rehash
+                val plain = inp.readInt()
+                set.plainHosts = HashSet(capacityFor(plain))
+                repeat(plain) { set.plainHosts.add(inp.readUTF()) }
+                val nh = inp.readInt()
+                set.hostRules = HashMap(capacityFor(nh))
+                repeat(nh) {
                     val h = inp.readUTF(); val n = inp.readInt()
                     set.hostRules[h] = ArrayList<NetRule>(n).apply { repeat(n) { add(readRule(inp)) } }
                 }
-                repeat(inp.readInt()) {
+                val nt = inp.readInt()
+                set.tokenRules = HashMap(capacityFor(nt))
+                repeat(nt) {
                     val t = inp.readUTF(); val n = inp.readInt()
                     set.tokenRules[t] = ArrayList<NetRule>(n).apply { repeat(n) { add(readRule(inp)) } }
                 }
                 repeat(inp.readInt()) { set.noToken.add(readRule(inp)) }
             }
-            repeat(inp.readInt()) {
+            onNetworkReady?.invoke(e)
+            val nHide = inp.readInt()
+            val h = HashMap<String, ArrayList<String>>(capacityFor(nHide))
+            repeat(nHide) {
                 val d = inp.readUTF(); val n = inp.readInt()
-                e.hide[d] = ArrayList<String>(n).apply { repeat(n) { add(inp.readUTF()) } }
+                h[d] = ArrayList<String>(n).apply { repeat(n) { add(inp.readUTF()) } }
             }
-            repeat(inp.readInt()) {
+            val nExc = inp.readInt()
+            val x = HashMap<String, HashSet<String>>(capacityFor(nExc))
+            repeat(nExc) {
                 val d = inp.readUTF(); val n = inp.readInt()
-                e.hideExcept[d] = HashSet<String>(n).apply { repeat(n) { add(inp.readUTF()) } }
+                x[d] = HashSet<String>(n).apply { repeat(n) { add(inp.readUTF()) } }
             }
+            e.hideExcept = x
+            e.hide = h
             return e
         }
 

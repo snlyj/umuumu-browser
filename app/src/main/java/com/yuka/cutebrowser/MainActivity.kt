@@ -8,7 +8,6 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.os.Looper
-import android.os.Process
 import android.os.SystemClock
 import android.view.WindowManager
 import android.webkit.CookieManager
@@ -22,7 +21,9 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
 import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
 import androidx.biometric.BiometricPrompt
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -36,6 +37,8 @@ import com.yuka.cutebrowser.browser.SessionStore
 import com.yuka.cutebrowser.browser.UrlUtils
 import com.yuka.cutebrowser.data.CuteRepository
 import com.yuka.cutebrowser.dns.DohManager
+import com.yuka.cutebrowser.perf.StartupMarks
+import com.yuka.cutebrowser.perf.section
 import com.yuka.cutebrowser.data.SecurityPrefs
 import com.yuka.cutebrowser.ui.AppProtection
 import com.yuka.cutebrowser.ui.BrowserScreen
@@ -43,6 +46,7 @@ import com.yuka.cutebrowser.ui.LockScreen
 import com.yuka.cutebrowser.ui.theme.CuteTheme
 import com.yuka.cutebrowser.ui.theme.CuteThemeId
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -87,6 +91,7 @@ class MainActivity : FragmentActivity(), AppProtection {
     private val clearMarker by lazy { File(filesDir, "clear_on_exit.pending") }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        StartupMarks.mark("activityCreate")
         val splash = installSplashScreen()
         splash.setKeepOnScreenCondition { themeId == null || !sessionReady }
         enableEdgeToEdge()
@@ -103,18 +108,15 @@ class MainActivity : FragmentActivity(), AppProtection {
                 runCatching { runtimePermissions.launch(perms) }.onFailure { runtimeCallback = null; cb(false) }
             },
         )
-        // 过滤规则（约 12 万条）在低优先级后台线程加载：有缓存读缓存，没有就编译后写缓存
-        val ctx = applicationContext
-        Thread({
-            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
-            AdBlocker.load(ctx, filterCacheKey())
-        }, "umu-filter").start()
+        // 过滤规则（约 12 万条）已经在 UmuApp.onCreate 里开始加载；这里兜底（比如测试里没有 Application 子类）
+        AdBlocker.preload(applicationContext)
 
         // 设置的读取全在协程里（DataStore 自己在 IO 线程），主线程不阻塞
         lifecycleScope.launch {
             combine(repo.theme, repo.webDark) { t, d -> t to d }.collect { (t, d) ->
                 controller.setWebDark(t == CuteThemeId.STARRY && d)
                 themeId = t
+                StartupMarks.mark("themeReady")
             }
         }
         lifecycleScope.launch { repo.engine.collect { controller.engine = it } }
@@ -136,6 +138,13 @@ class MainActivity : FragmentActivity(), AppProtection {
         lifecycleScope.launch {
             // 安全设置要在第一个 WebView 创建之前就位。读失败也不能让启动画面一直卡住。
             try {
+                // 会话文件（标签页列表 + 每个标签的前进后退记录）和设置读取互不依赖：同时开读，省掉一次串行等待。
+                // 只读不写；如果马上发现要"补清除"，这份结果直接丢掉
+                val sessionRead = async(Dispatchers.IO) {
+                    section("session.read") {
+                        runCatching { controller.loadSessionAndStates() }.getOrDefault(null to emptyMap<Long, android.os.Bundle>())
+                    }
+                }
                 val s = runCatching { repo.security.first() }.getOrDefault(SecurityPrefs())
                 applySec(s)
                 runCatching { controller.setFpExceptions(repo.fpOff.first()) }
@@ -145,12 +154,13 @@ class MainActivity : FragmentActivity(), AppProtection {
                 val (saved, tabStates) = withContext(Dispatchers.IO) {
                     if (s.clearOnExit && clearMarker.exists()) {
                         // 上次没正常退出（比如从最近任务里划掉）：现在补清
+                        sessionRead.cancel()
                         SessionStore(applicationContext).clear()
                         repo.clearHistory()
                         File(cacheDir, "WebView").deleteRecursively() // WebView 还没加载，删缓存目录是安全的
                         wipe = true
                         null to emptyMap<Long, android.os.Bundle>()
-                    } else controller.loadSessionAndStates()
+                    } else sessionRead.await()
                 }
                 if (wipe) {
                     CookieManager.getInstance().removeAllCookies { clearMarker.delete() }
@@ -161,6 +171,7 @@ class MainActivity : FragmentActivity(), AppProtection {
                 handleIntent(startIntent, initial = saved == null)
             } finally {
                 sessionReady = true
+                StartupMarks.mark("sessionReady")
             }
             if (locked) unlock() // 冷启动：onStart 时界面还没好，这里再弹验证
             repo.security.collect { applySec(it) }
@@ -176,19 +187,23 @@ class MainActivity : FragmentActivity(), AppProtection {
                     if (secure) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                 }
+                // 内容第一次真正画出来之后：报告「完全显示」（Macrobenchmark / 系统启动耗时统计用），
+                // 然后等主线程空闲再预热备用 WebView 和 DNS。以前的预热在读设置的空档里就开始了，
+                // 创建 WebView 会占住主线程，把首页首帧往后推。
+                LaunchedEffect(Unit) {
+                    withFrameNanos { }
+                    StartupMarks.mark("firstContentFrame")
+                    reportFullyDrawn()
+                    Looper.myQueue().addIdleHandler {
+                        section("prewarm") { controller.prewarm() }
+                        false
+                    }
+                }
                 CuteTheme(theme, incognito = incognito) {
                     // 上锁时根本不组合浏览界面：读屏软件、没关掉的弹窗（它们是独立窗口，盖不住）都看不到后面的内容；
                     // WebView 本身还在 controller 里，解锁后原样接上
                     if (locked) LockScreen { unlock() } else BrowserScreen(controller, repo, this)
                 }
-            }
-        }
-
-        // 首帧画完、主线程空闲后再预热 WebView 内核和 DNS，不跟启动抢时间
-        window.decorView.post {
-            Looper.myQueue().addIdleHandler {
-                controller.prewarm()
-                false
             }
         }
     }
@@ -198,13 +213,6 @@ class MainActivity : FragmentActivity(), AppProtection {
         controller.applySecurity(s)
         if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(!s.appLock)
     }
-
-    private fun filterCacheKey(): String = runCatching {
-        val pi = packageManager.getPackageInfo(packageName, 0)
-        @Suppress("DEPRECATION")
-        val vc = if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode else pi.versionCode.toLong()
-        "$vc-${pi.lastUpdateTime}"
-    }.getOrDefault("0")
 
     // ---------------- 应用锁 ----------------
 
@@ -298,14 +306,9 @@ class MainActivity : FragmentActivity(), AppProtection {
         }
     }
 
-    @Suppress("DEPRECATION")
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        // 内存紧张（或进程被放到缓存里）时回收后台标签的 WebView；单纯切到后台(UI_HIDDEN)不回收
-        if (level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW ||
-            level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL ||
-            level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
-        ) controller.onLowMemory()
+        controller.onTrimMemory(level)
     }
 
     override fun onDestroy() {
