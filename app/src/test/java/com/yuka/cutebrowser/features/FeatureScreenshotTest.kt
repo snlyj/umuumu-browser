@@ -21,6 +21,7 @@ import com.github.takahirom.roborazzi.captureScreenRoboImage
 import com.yuka.cutebrowser.ui.FindBar
 import com.yuka.cutebrowser.ui.ReaderLoading
 import com.yuka.cutebrowser.ui.ReaderToolbar
+import com.yuka.cutebrowser.ui.TranslateCard
 import com.yuka.cutebrowser.ui.theme.CuteTheme
 import com.yuka.cutebrowser.ui.theme.CuteThemeId
 import com.yuka.cutebrowser.ui.theme.LocalCutePalette
@@ -94,6 +95,23 @@ class FeatureScreenshotTest {
         rule.onNodeWithText("110%").assertExists()
         rule.onNodeWithContentDescription("退出阅读模式").assertExists()
         captureScreenRoboImage("$OUT/45_reader_toolbar_loading.png")
+    }
+
+    @Test
+    fun translateConfirm() {
+        rule.setContent {
+            CuteTheme(CuteThemeId.STRAWBERRY) {
+                Box(Modifier.fillMaxSize().background(LocalCutePalette.current.text.copy(alpha = 0.35f)).padding(22.dp)) {
+                    TranslateCard(
+                        TranslateAsk(1, "https://en.wikipedia.org/wiki/Rabbit", incognito = false),
+                        TranslateProvider.GOOGLE, TranslateTarget.ZH_CN, onConfirm = { _, _ -> }, onDismiss = {},
+                    )
+                }
+            }
+        }
+        rule.onNodeWithText("会发送：en.wikipedia.org 的网址").assertExists()
+        rule.onNodeWithText("发送并翻译 🌏").assertExists()
+        captureScreenRoboImage("$OUT/46_translate_confirm.png")
     }
 
     companion object {

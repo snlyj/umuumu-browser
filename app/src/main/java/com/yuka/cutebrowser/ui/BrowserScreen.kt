@@ -179,6 +179,10 @@ fun BrowserScreen(controller: BrowserController, repo: CuteRepository, protectio
             protection = protection,
         )
         controller.permissionPrompt?.let { PermissionDialog(it) }
+        controller.features.translateAsk?.let { ask ->
+            val f = controller.features
+            TranslateDialog(ask, f.prefs.translateProvider, f.prefs.translateTarget, onConfirm = { pr, t -> f.confirmTranslate(pr, t) }, onDismiss = { f.cancelTranslate() })
+        }
         if (shield && !tab.isHome) ShieldDialog(tab, controller) { shield = false }
     }
 }

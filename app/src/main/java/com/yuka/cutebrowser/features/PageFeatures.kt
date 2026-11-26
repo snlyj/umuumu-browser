@@ -76,6 +76,10 @@ class PageFeatures(private val activity: ComponentActivity, private val controll
     var reader by mutableStateOf<ReaderSession?>(null)
         private set
 
+    /** 「翻译网页」确认弹窗（null = 没弹） */
+    var translateAsk by mutableStateOf<TranslateAsk?>(null)
+        private set
+
     @Volatile private var checkJs: String? = null
     @Volatile private var extractJs: String? = null
 
@@ -335,6 +339,26 @@ class PageFeatures(private val activity: ComponentActivity, private val controll
         pendingScroll.remove(v)
         (v.parent as? android.view.ViewGroup)?.removeView(v)
         runCatching { v.stopLoading(); v.webViewClient = WebViewClient(); v.destroy() }
+    }
+
+    // ---------------- 翻译网页（每次都要确认，不会自动发送） ----------------
+
+    fun askTranslate() {
+        val t = controller.current
+        if (t.isHome || !UrlUtils.isWebUrl(t.url)) { controller.toast("先打开一个网页再翻译吧～"); return }
+        if (!Translate.isTranslatable(t.url)) { controller.toast("局域网或本机的网页没法用在线翻译哦 🥺"); return }
+        translateAsk = TranslateAsk(t.id, t.url, t.incognito)
+    }
+
+    fun cancelTranslate() { translateAsk = null }
+
+    /** 用户在弹窗里点了「发送并翻译」：在新标签（隐身标签就开隐身标签）里打开翻译服务 */
+    fun confirmTranslate(provider: TranslateProvider, target: TranslateTarget) {
+        val a = translateAsk ?: return
+        translateAsk = null
+        prefs.translateProvider = provider
+        prefs.translateTarget = target
+        controller.newTab(Translate.url(provider, target, a.url), incognito = a.incognito)
     }
 
     companion object {
