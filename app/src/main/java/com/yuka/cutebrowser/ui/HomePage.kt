@@ -130,7 +130,8 @@ fun HomePage(
         // 问候 + 小兔子
         Row(Modifier.plate(plate, p, fullWidth = true), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(remember { greeting() }, color = p.subText, fontSize = 15.sp)
+                // 有壁纸时问候语和页脚改用正文色：壁纸上的各种底色里，灰紫的次要文字达不到 4.5:1（测试里逐个检查过）
+                Text(remember { greeting() }, color = if (ap.wallpaper == Wallpaper.NONE) p.subText else p.text, fontSize = 15.sp)
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("唔姆唔姆", color = p.accentInk, fontSize = 30.sp, fontWeight = FontWeight.Black)
@@ -189,7 +190,7 @@ fun HomePage(
         Spacer(Modifier.height(24.dp))
         Text(
             "· 用爱心制作 · 💕",
-            color = p.subText, fontSize = 12.sp, textAlign = TextAlign.Center,
+            color = if (ap.wallpaper == Wallpaper.NONE) p.subText else p.text, fontSize = 12.sp, textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().plate(plate, p, fullWidth = true),
         )
         Spacer(Modifier.height(12.dp))

@@ -31,7 +31,7 @@ import kotlin.math.PI
 import kotlin.math.sin
 
 /** 自定义壁纸上盖的遮罩、以及文字底板的不透明度（测试里按最坏情况算过对比度） */
-const val TEXT_PLATE_ALPHA = 0.86f
+const val TEXT_PLATE_ALPHA = 0.92f
 
 /**
  * 首页壁纸。内置的都是 Canvas 画的（不占 APK 体积、不用解码图片）：只在大小或配色变化时重画，
