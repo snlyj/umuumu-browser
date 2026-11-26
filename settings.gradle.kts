@@ -7,3 +7,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "CuteBrowser"
 include(":app")
+include(":smoketest")
