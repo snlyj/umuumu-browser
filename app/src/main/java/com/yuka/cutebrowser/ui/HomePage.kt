@@ -44,6 +44,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yuka.cutebrowser.data.PageEntry
+import com.yuka.cutebrowser.data.Wallpaper
+import com.yuka.cutebrowser.ui.theme.LocalAppearance
+import com.yuka.cutebrowser.ui.theme.LocalReduceMotion
 import com.yuka.cutebrowser.ui.theme.CutePalette
 import com.yuka.cutebrowser.ui.theme.LocalCutePalette
 import java.util.Calendar
@@ -105,11 +108,16 @@ fun HomePage(
     modifier: Modifier = Modifier,
 ) {
     val p = LocalCutePalette.current
+    val ap = LocalAppearance.current
+    // 自定义照片壁纸：标题、问候这些直接落在照片上的文字，垫一块半透明底板，保证任何照片上都读得清
+    val plate = ap.wallpaper == Wallpaper.CUSTOM
+    Box(modifier.fillMaxSize().background(p.background)) {
+    // 壁纸固定在后面，不跟着内容滚动（也就不会因为滚动重画）
+    HomeWallpaper(ap.wallpaper, ap.wallpaperStamp, ap.scrim, Modifier.matchParentSize())
     // 平板/横屏：内容最宽 640dp 并居中，不会拉成一条很宽的长条
     Box(
-        modifier
+        Modifier
             .fillMaxSize()
-            .background(p.background)
             .verticalScroll(rememberScrollState()),
         contentAlignment = Alignment.TopCenter,
     ) {
@@ -120,7 +128,7 @@ fun HomePage(
             .padding(horizontal = 20.dp, vertical = 12.dp),
     ) {
         // 问候 + 小兔子
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.plate(plate, p, fullWidth = true), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(remember { greeting() }, color = p.subText, fontSize = 15.sp)
                 Spacer(Modifier.height(6.dp))
@@ -131,11 +139,11 @@ fun HomePage(
                 }
                 Text("想去哪里逛逛呢～", color = p.text, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp))
             }
-            BunnyMascot(Modifier.size(104.dp))
+            MascotView(ap.mascot, Modifier.size(104.dp))
         }
 
         Spacer(Modifier.height(22.dp))
-        SectionTitle("常用网站", "🎀")
+        SectionTitle("常用网站", "🎀", plate)
         Spacer(Modifier.height(10.dp))
         val bgs = listOf(p.pink, p.lavender, p.mint)
         QuickSites.chunked(3).forEachIndexed { row, sites ->
@@ -159,7 +167,7 @@ fun HomePage(
 
         if (bookmarks.isNotEmpty()) {
             Spacer(Modifier.height(22.dp))
-            SectionTitle("我的收藏", "💗")
+            SectionTitle("我的收藏", "💗", plate)
             Spacer(Modifier.height(10.dp))
             bookmarks.take(5).forEach { b ->
                 Row(
@@ -182,17 +190,26 @@ fun HomePage(
         Text(
             "· 用爱心制作 · 💕",
             color = p.subText, fontSize = 12.sp, textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().plate(plate, p, fullWidth = true),
         )
         Spacer(Modifier.height(12.dp))
     }
     }
+    }
 }
 
+/** 照片壁纸上的文字底板；没用照片壁纸时什么都不加，版面和以前完全一样 */
+private fun Modifier.plate(on: Boolean, p: CutePalette, fullWidth: Boolean = false): Modifier =
+    if (!on) this else this
+        .then(if (fullWidth) Modifier.fillMaxWidth() else Modifier)
+        .clip(RoundedCornerShape(22.dp))
+        .background(p.surface.copy(alpha = TEXT_PLATE_ALPHA))
+        .padding(horizontal = 14.dp, vertical = 8.dp)
+
 @Composable
-private fun SectionTitle(text: String, emoji: String) {
+private fun SectionTitle(text: String, emoji: String, plate: Boolean = false) {
     val p = LocalCutePalette.current
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.plate(plate, p), verticalAlignment = Alignment.CenterVertically) {
         Text(emoji, fontSize = 16.sp)
         Spacer(Modifier.width(6.dp))
         Text(text, color = p.text, fontSize = 17.sp, fontWeight = FontWeight.Bold)
@@ -258,9 +275,11 @@ private fun QuoteCard(quote: String, p: CutePalette) {
 @Composable
 fun BunnyMascot(modifier: Modifier = Modifier, masked: Boolean = false) {
     val p = LocalCutePalette.current
-    val wiggle by rememberInfiniteTransition(label = "ears").animateFloat(
+    val reduce = LocalReduceMotion.current
+    // 减少动画时耳朵不摇；读取在 Canvas 的绘制阶段，摇耳朵不会触发重组
+    val wiggle by (if (reduce) remember { androidx.compose.runtime.mutableFloatStateOf(0f) } else rememberInfiniteTransition(label = "ears").animateFloat(
         -6f, 6f, infiniteRepeatable(tween(1100), RepeatMode.Reverse), label = "earAngle",
-    )
+    ))
     val white = if (p.isDark) Color(0xFFF4F0FF) else Color.White
     val earInner = Color(0xFFFFC2D1)
     val blush = Color(0xFFFFB3C7)

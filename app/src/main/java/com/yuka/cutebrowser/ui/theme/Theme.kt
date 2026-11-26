@@ -18,10 +18,24 @@ import androidx.core.view.WindowCompat
 
 /** 三套可爱主题 */
 enum class CuteThemeId(val label: String, val emoji: String) {
+    // 注意：枚举名会存进用户设置里，不能改名；只能往后加
     STRAWBERRY("草莓牛奶", "🍓"),
     SAKURA("樱花", "🌸"),
     STARRY("星空梦境", "🌙"),
+    MINT("薄荷绿", "🍃"),
+    LILAC("芙莉紫", "🔮"),
+    SODA("汽水蓝", "🫧"),
+    PEACH("蜜桃橘", "🍑"),
 }
+
+/** 设置里显示的顺序：浅色在前，夜间（星空梦境）放最后 */
+val ThemeOrder = listOf(
+    CuteThemeId.STRAWBERRY, CuteThemeId.SAKURA, CuteThemeId.MINT, CuteThemeId.LILAC,
+    CuteThemeId.SODA, CuteThemeId.PEACH, CuteThemeId.STARRY,
+)
+
+/** 「跟随系统」里系统深色时用的夜间主题 */
+val NightTheme = CuteThemeId.STARRY
 
 @Immutable
 data class CutePalette(
@@ -82,6 +96,34 @@ val StarryPalette = CutePalette(
     isDark = true,
 )
 
+val MintPalette = CutePalette(
+    background = Color(0xFFF2FBF6), surface = Color(0xFFFCFFFD),
+    pink = Color(0xFFCFF1E0), lavender = Color(0xFFD9EEF5), mint = Color(0xFFE7F5CF),
+    accent = Color(0xFF7DD6AE), text = Color(0xFF2C4A3E), subText = Color(0xFF4F7064),
+    onAccent = Color(0xFF143D2E), isDark = false, accentInk = Color(0xFF1E7A57),
+)
+
+val LilacPalette = CutePalette(
+    background = Color(0xFFFAF5FF), surface = Color(0xFFFFFDFF),
+    pink = Color(0xFFE6D6FA), lavender = Color(0xFFF6D9EE), mint = Color(0xFFD9E4FF),
+    accent = Color(0xFFB996F2), text = Color(0xFF45365F), subText = Color(0xFF6A5886),
+    onAccent = Color(0xFF33204F), isDark = false, accentInk = Color(0xFF7140C0),
+)
+
+val SodaPalette = CutePalette(
+    background = Color(0xFFF0F9FF), surface = Color(0xFFFBFEFF),
+    pink = Color(0xFFCCE8FA), lavender = Color(0xFFD8E2FF), mint = Color(0xFFCFF3EE),
+    accent = Color(0xFF6FC3F3), text = Color(0xFF2B4560), subText = Color(0xFF506A85),
+    onAccent = Color(0xFF0F3956), isDark = false, accentInk = Color(0xFF1A6FAE),
+)
+
+val PeachPalette = CutePalette(
+    background = Color(0xFFFFF5EC), surface = Color(0xFFFFFCF8),
+    pink = Color(0xFFFFD9C4), lavender = Color(0xFFFFE6B5), mint = Color(0xFFFFD3DE),
+    accent = Color(0xFFFFA27A), text = Color(0xFF5A4234), subText = Color(0xFF7A5C4B),
+    onAccent = Color(0xFF4A2210), isDark = false, accentInk = Color(0xFFAE4416),
+)
+
 /** 隐身模式：深薰衣草紫 + 戴眼罩的小兔子 */
 val IncognitoPalette = CutePalette(
     background = Color(0xFF2B2140),
@@ -100,6 +142,25 @@ fun paletteOf(id: CuteThemeId): CutePalette = when (id) {
     CuteThemeId.STRAWBERRY -> StrawberryPalette
     CuteThemeId.SAKURA -> SakuraPalette
     CuteThemeId.STARRY -> StarryPalette
+    CuteThemeId.MINT -> MintPalette
+    CuteThemeId.LILAC -> LilacPalette
+    CuteThemeId.SODA -> SodaPalette
+    CuteThemeId.PEACH -> PeachPalette
+}
+
+/** 全部可选配色（含隐身）：测试用来逐个检查对比度 */
+val AllPalettes: List<Pair<String, CutePalette>> =
+    CuteThemeId.entries.map { it.name to paletteOf(it) } + ("INCOGNITO" to IncognitoPalette)
+
+/**
+ * 实际使用的主题：「跟随系统」打开时，系统深色 → 夜间主题；系统浅色 → 用户选的浅色主题
+ * （如果用户选的本来就是夜间主题，浅色时退回默认的草莓牛奶）。
+ */
+fun resolveTheme(selected: CuteThemeId, followSystem: Boolean, systemDark: Boolean): CuteThemeId = when {
+    !followSystem -> selected
+    systemDark -> NightTheme
+    paletteOf(selected).isDark -> CuteThemeId.STRAWBERRY
+    else -> selected
 }
 
 val LocalCutePalette = staticCompositionLocalOf { StrawberryPalette }

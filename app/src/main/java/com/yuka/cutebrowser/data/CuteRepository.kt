@@ -109,6 +109,7 @@ class CuteRepository(context: Context) {
         val AD_OFF = stringPreferencesKey("adblock_off")
         val FP_OFF = stringPreferencesKey("fp_off")
         val TZ_SITES = stringPreferencesKey("tzlang_sites")
+        val APPEARANCE = stringPreferencesKey("appearance")
     }
 
     val security: Flow<SecurityPrefs> = dsData.map { it[Keys.SEC] }.distinctUntilChanged().map { decodeSec(it) }
@@ -244,6 +245,13 @@ class CuteRepository(context: Context) {
         .map { decode(it) }.flowOn(Dispatchers.Default)
     val localDownloads: Flow<List<LocalDownload>> = dsData.map { it[Keys.LOCAL_DL] }.distinctUntilChanged()
         .map { decodeLocal(it) }.flowOn(Dispatchers.Default)
+
+    /** 外观设置（v1.7）：跟随系统深色、壁纸、吉祥物、进度条样式、减少动画、震动/声音 */
+    val appearance: Flow<AppearancePrefs> = dsData.map { it[Keys.APPEARANCE] }.distinctUntilChanged().map { decodeAppearance(it) }
+
+    suspend fun updateAppearance(f: (AppearancePrefs) -> AppearancePrefs) {
+        ds.edit { p -> p[Keys.APPEARANCE] = encodeAppearance(f(decodeAppearance(p[Keys.APPEARANCE]))) }
+    }
 
     suspend fun setTheme(id: CuteThemeId) { ds.edit { it[Keys.THEME] = id.name } }
     suspend fun setEngine(e: SearchEngine) { ds.edit { it[Keys.ENGINE] = e.name } }

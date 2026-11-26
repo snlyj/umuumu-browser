@@ -1,6 +1,18 @@
 package com.yuka.cutebrowser.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import com.yuka.cutebrowser.ui.theme.LocalReduceMotion
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -68,9 +80,7 @@ import kotlinx.coroutines.isActive
 import com.yuka.cutebrowser.data.CuteRepository
 import com.yuka.cutebrowser.data.PageEntry
 import com.yuka.cutebrowser.data.SearchEngine
-import com.yuka.cutebrowser.ui.theme.CuteThemeId
 import com.yuka.cutebrowser.ui.theme.LocalCutePalette
-import com.yuka.cutebrowser.ui.theme.paletteOf
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -135,7 +145,21 @@ fun CuteSheets(
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 16.dp),
         ) {
-            when (sheet) {
+            val reduce = LocalReduceMotion.current
+            AnimatedContent(
+                targetState = sheet,
+                transitionSpec = {
+                    if (reduce) EnterTransition.None togetherWith ExitTransition.None
+                    else {
+                        // 往"更深一层"（菜单→设置→安全→网站权限）从右边滑进来，返回时从左边回来
+                        val dir = if (sheetDepth(targetState) >= sheetDepth(initialState)) 1 else -1
+                        (slideInHorizontally(tween(260, easing = FastOutSlowInEasing)) { it / 5 * dir } + fadeIn(tween(220))) togetherWith
+                            (slideOutHorizontally(tween(180)) { -it / 5 * dir } + fadeOut(tween(120)))
+                    }
+                },
+                label = "sheetContent",
+            ) { s -> Column(Modifier.fillMaxWidth()) {
+            when (s) {
                 SheetType.Menu -> MenuSheet(
                     isBookmarked = isBookmarked,
                     onNewTab = { controller.newTab(); close() },
@@ -181,8 +205,17 @@ fun CuteSheets(
                 SheetType.SitePerms -> SitePermsSheet(repo, controller, onClose = close)
                 SheetType.None -> Unit
             }
+            } }
         }
     }
+}
+
+/** 面板的"深度"：决定切换时的滑动方向 */
+internal fun sheetDepth(t: SheetType): Int = when (t) {
+    SheetType.Settings -> 1
+    SheetType.Security -> 2
+    SheetType.SitePerms -> 3
+    else -> 0
 }
 
 @Composable
@@ -265,6 +298,7 @@ private fun MenuSheet(
 @Composable
 private fun TabsSheet(controller: BrowserController, close: () -> Unit) {
     val p = LocalCutePalette.current
+    val reduceMotion = LocalReduceMotion.current
     SheetHeader("标签页 (${controller.tabs.size})", "🗂️") {
         JellyButton(
             onClick = { controller.newTab(incognito = true); close() },
@@ -302,7 +336,8 @@ private fun TabsSheet(controller: BrowserController, close: () -> Unit) {
         itemsIndexed(controller.tabs, key = { _, t -> t.id }) { index, t ->
             val selected = index == controller.currentIndex
             Row(
-                Modifier
+                (if (reduceMotion) Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = null)
+                else Modifier.animateItem(fadeInSpec = tween(220), placementSpec = spring(0.8f, 380f), fadeOutSpec = tween(160)))
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(24.dp))
                     .background(if (t.incognito) Color(0xFF3A2A5C) else if (selected) p.pink else p.background)
@@ -400,10 +435,9 @@ private fun EntryListSheet(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SettingsSheet(controller: BrowserController, repo: CuteRepository, onClose: () -> Unit, onSecurity: () -> Unit) {
+internal fun SettingsSheet(controller: BrowserController, repo: CuteRepository, onClose: () -> Unit, onSecurity: () -> Unit) {
     val p = LocalCutePalette.current
     val scope = rememberCoroutineScope()
-    val theme by repo.theme.collectAsState(initial = CuteThemeId.STRAWBERRY)
     val engine by repo.engine.collectAsState(initial = SearchEngine.BING)
     val adBlock by repo.adBlock.collectAsState(initial = true)
     val webDark by repo.webDark.collectAsState(initial = true)
@@ -413,33 +447,7 @@ private fun SettingsSheet(controller: BrowserController, repo: CuteRepository, o
     Column(Modifier.verticalScroll(rememberScrollState())) {
         SheetHeader("设置", "🌼", onClose = onClose)
 
-        Label("主题皮肤")
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            CuteThemeId.entries.forEach { id ->
-                val tp = paletteOf(id)
-                val selected = id == theme
-                Column(
-                    Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(24.dp))
-                        .background(tp.background)
-                        .border(if (selected) 3.dp else 1.5.dp, if (selected) p.accent else tp.pink, RoundedCornerShape(24.dp))
-                        .bouncyClick { scope.launch { repo.setTheme(id) } }
-                        .padding(vertical = 14.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(id.emoji, fontSize = 26.sp)
-                    Spacer(Modifier.height(6.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        listOf(tp.pink, tp.lavender, tp.mint, tp.accent).forEach {
-                            Box(Modifier.size(10.dp).clip(CircleShape).background(it))
-                        }
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    Text(id.label, color = tp.text, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
+        AppearanceSection(repo) { controller.toast(it) }
 
         Spacer(Modifier.height(18.dp))
         Label("默认搜索引擎")

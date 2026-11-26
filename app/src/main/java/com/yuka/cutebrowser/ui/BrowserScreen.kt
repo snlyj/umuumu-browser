@@ -117,6 +117,7 @@ fun BrowserScreen(controller: BrowserController, repo: CuteRepository, protectio
                 isBookmarked = isBookmarked,
                 onSubmit = { controller.submit(it) },
                 onToggleBookmark = toggleBookmark,
+                heartPopKey = heartBurst,
                 onRefresh = { controller.reloadOrStop() },
                 onShield = { shield = true },
             )
@@ -146,6 +147,8 @@ fun BrowserScreen(controller: BrowserController, repo: CuteRepository, protectio
                     }
                     tab.warning?.let { SecurityWarningPage(tab, it, controller) }
                 }
+                // 开新标签/切换/关闭标签时，页面从底色里轻轻"浮"出来（只画一块渐隐的底色，不给 WebView 加图层）
+                TabSwitchVeil(tab.id)
             }
             AnimatedVisibility(visible = !imeVisible, enter = expandVertically(), exit = shrinkVertically()) {
                 BottomBar(
@@ -184,6 +187,7 @@ private fun AddressBar(
     isBookmarked: Boolean,
     onSubmit: (String) -> Unit,
     onToggleBookmark: () -> Unit,
+    heartPopKey: Int,
     onRefresh: () -> Unit,
     onShield: () -> Unit,
 ) {
@@ -260,7 +264,7 @@ private fun AddressBar(
                     Icon(
                         if (isBookmarked) CuteIcons.HeartFilled else CuteIcons.Heart,
                         if (isBookmarked) "取消收藏" else "收藏",
-                        tint = p.accent, modifier = Modifier.size(22.dp),
+                        tint = p.accent, modifier = Modifier.size(22.dp).heartPop(heartPopKey),
                     )
                 }
             }

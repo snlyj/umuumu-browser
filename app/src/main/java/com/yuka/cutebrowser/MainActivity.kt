@@ -41,7 +41,12 @@ import com.yuka.cutebrowser.ui.AppProtection
 import com.yuka.cutebrowser.ui.BrowserScreen
 import com.yuka.cutebrowser.ui.LockScreen
 import com.yuka.cutebrowser.ui.theme.CuteTheme
+import androidx.compose.foundation.isSystemInDarkTheme
+import com.yuka.cutebrowser.data.AppearancePrefs
 import com.yuka.cutebrowser.ui.theme.CuteThemeId
+import com.yuka.cutebrowser.ui.theme.ProvideAppearance
+import com.yuka.cutebrowser.ui.theme.paletteOf
+import com.yuka.cutebrowser.ui.theme.resolveTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
@@ -74,6 +79,10 @@ class MainActivity : FragmentActivity(), AppProtection {
 
     /** 主题从 DataStore 异步读出来之前为 null：启动画面一直盖着，读完再显示界面，避免先闪一下默认主题 */
     private var themeId by mutableStateOf<CuteThemeId?>(null)
+    /** 外观设置（壁纸、吉祥物、跟随系统…）。和主题一起读出来后才撤掉启动画面 */
+    private var appearance by mutableStateOf<AppearancePrefs?>(null)
+    /** 「网页跟随主题变暗」开关；真正是否变暗还要看最终用的主题是不是深色 */
+    private var webDarkPref by mutableStateOf(true)
     /** 上次的标签页恢复完了没（只读一个小 JSON，不创建 WebView） */
     private var sessionReady by mutableStateOf(false)
     private var sec by mutableStateOf(SecurityPrefs())
@@ -88,7 +97,7 @@ class MainActivity : FragmentActivity(), AppProtection {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val splash = installSplashScreen()
-        splash.setKeepOnScreenCondition { themeId == null || !sessionReady }
+        splash.setKeepOnScreenCondition { themeId == null || appearance == null || !sessionReady }
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         repo = CuteRepository(this)
@@ -113,10 +122,11 @@ class MainActivity : FragmentActivity(), AppProtection {
         // 设置的读取全在协程里（DataStore 自己在 IO 线程），主线程不阻塞
         lifecycleScope.launch {
             combine(repo.theme, repo.webDark) { t, d -> t to d }.collect { (t, d) ->
-                controller.setWebDark(t == CuteThemeId.STARRY && d)
+                webDarkPref = d
                 themeId = t
             }
         }
+        lifecycleScope.launch { repo.appearance.collect { appearance = it } }
         lifecycleScope.launch { repo.engine.collect { controller.engine = it } }
         lifecycleScope.launch { repo.adBlock.collect { controller.adBlockEnabled = it } }
         lifecycleScope.launch { repo.adBlockOff.collect { controller.adBlockOff = it } }
@@ -167,8 +177,14 @@ class MainActivity : FragmentActivity(), AppProtection {
         }
 
         setContent {
-            val theme = themeId
-            if (theme != null && sessionReady) {
+            val selected = themeId
+            val ap = appearance
+            if (selected != null && ap != null && sessionReady) {
+                // 跟随系统深色：系统深色 → 夜间主题；Compose 会在系统切换深浅色时自动重组（Activity 已声明自己处理 uiMode）
+                val systemDark = isSystemInDarkTheme()
+                val theme = resolveTheme(selected, ap.followSystem, systemDark)
+                val darkTheme = paletteOf(theme).isDark
+                androidx.compose.runtime.LaunchedEffect(darkTheme, webDarkPref) { controller.setWebDark(darkTheme && webDarkPref) }
                 val incognito = controller.current.incognito
                 // 防截屏/录屏：隐身标签总是开；普通标签看设置；上锁时也开（最近任务里看不到内容）
                 val secure = wantSecure()
@@ -176,11 +192,11 @@ class MainActivity : FragmentActivity(), AppProtection {
                     if (secure) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                 }
-                CuteTheme(theme, incognito = incognito) {
+                CuteTheme(theme, incognito = incognito) { ProvideAppearance(ap) {
                     // 上锁时根本不组合浏览界面：读屏软件、没关掉的弹窗（它们是独立窗口，盖不住）都看不到后面的内容；
                     // WebView 本身还在 controller 里，解锁后原样接上
                     if (locked) LockScreen { unlock() } else BrowserScreen(controller, repo, this)
-                }
+                } }
             }
         }
 
