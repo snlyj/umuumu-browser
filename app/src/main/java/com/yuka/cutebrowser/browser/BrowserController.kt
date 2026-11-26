@@ -1200,7 +1200,8 @@ class BrowserController(
                 setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
             }
             val dm = activity.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            dm.enqueue(req)
+            val id = dm.enqueue(req)
+            features.onDownloadEnqueued(id, url, fileName, p.mimeType, p.userAgent, (p.view?.tag as? TabState)?.incognito != false) // 不知道是哪个标签的：当隐身处理，不留记录
             toast("开始下载：$fileName 🎀")
         } catch (e: Exception) {
             toast("下载失败了：${e.message ?: "未知错误"}")

@@ -71,6 +71,14 @@ data class ReaderSession(val tabId: Long, val url: String, val incognito: Boolea
 class PageFeatures(private val activity: ComponentActivity, private val controller: BrowserController) {
     val find = FindState()
     val prefs = FeaturePrefs(activity.applicationContext)
+    /** 下载管理页（自己的下载记录 + 系统 DownloadManager），第一次打开时才建 */
+    val downloadCenter by lazy { DownloadCenter(activity.applicationContext, controller.downloads) }
+
+    /** BrowserController 发起 http(s) 下载后调用；隐身标签的下载不留网址记录 */
+    fun onDownloadEnqueued(dmId: Long, url: String, title: String, mime: String?, userAgent: String?, incognito: Boolean) {
+        if (incognito) return
+        activity.lifecycleScope.launch { runCatching { downloadCenter.record(dmId, url, title, mime, userAgent) } }
+    }
 
     /** 正在显示的阅读模式（同一时间只有当前标签的一个） */
     var reader by mutableStateOf<ReaderSession?>(null)

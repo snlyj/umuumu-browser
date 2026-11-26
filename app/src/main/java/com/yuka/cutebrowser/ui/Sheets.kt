@@ -53,18 +53,9 @@ import com.yuka.cutebrowser.browser.BrowserController
 import com.yuka.cutebrowser.browser.UrlUtils
 import com.yuka.cutebrowser.CrashLog
 import com.yuka.cutebrowser.browser.AdBlocker
-import com.yuka.cutebrowser.browser.DlStatus
-import com.yuka.cutebrowser.browser.DownloadItem
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Size
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import com.yuka.cutebrowser.data.CuteRepository
 import com.yuka.cutebrowser.data.PageEntry
 import com.yuka.cutebrowser.data.SearchEngine
@@ -176,7 +167,7 @@ fun CuteSheets(
                         },
                     )
                 }
-                SheetType.Downloads -> DownloadsSheet(controller)
+                SheetType.Downloads -> DownloadsPage(controller)
                 SheetType.Settings -> SettingsSheet(controller, repo, onClose = close) { onChange(SheetType.Security) }
                 SheetType.Security -> SecuritySheet(controller, repo, protection, onClose = close) { onChange(SheetType.SitePerms) }
                 SheetType.SitePerms -> SitePermsSheet(repo, controller, onClose = close)
@@ -573,139 +564,6 @@ internal fun ToggleRow(emoji: String, title: String, subtitle: String, checked: 
                     .clip(CircleShape)
                     .background(Color.White),
             )
-        }
-    }
-}
-
-private fun sizeText(b: Long): String = when {
-    b < 0 -> "?"
-    b < 1024 -> "$b B"
-    b < 1024 * 1024 -> String.format(Locale.US, "%.1f KB", b / 1024.0)
-    b < 1024L * 1024 * 1024 -> String.format(Locale.US, "%.1f MB", b / 1024.0 / 1024.0)
-    else -> String.format(Locale.US, "%.2f GB", b / 1024.0 / 1024.0 / 1024.0)
-}
-
-private fun mimeEmoji(mime: String?, title: String): String {
-    val m = mime.orEmpty()
-    val t = title.lowercase()
-    return when {
-        m.startsWith("image/") -> "🖼️"
-        m.startsWith("video/") -> "🎬"
-        m.startsWith("audio/") -> "🎵"
-        m.contains("pdf") || t.endsWith(".pdf") -> "📕"
-        m.contains("android.package") || t.endsWith(".apk") -> "🤖"
-        m.contains("zip") || m.contains("compressed") || t.endsWith(".zip") || t.endsWith(".rar") || t.endsWith(".7z") -> "📦"
-        m.startsWith("text/") -> "📝"
-        else -> "📄"
-    }
-}
-
-/** 下载管理：进行中的会每 0.7 秒刷新一次进度，没有进行中的就 2.5 秒刷新一次（只在面板打开时） */
-@Composable
-private fun DownloadsSheet(controller: BrowserController) {
-    val p = LocalCutePalette.current
-    val scope = rememberCoroutineScope()
-    var items by remember { mutableStateOf<List<DownloadItem>?>(null) }
-    var refresh by remember { mutableIntStateOf(0) }
-    LaunchedEffect(refresh) {
-        while (isActive) {
-            val list = controller.downloads.list()
-            items = list
-            delay(if (list.any { it.active }) 700 else 2500)
-        }
-    }
-    SheetHeader("下载管理", "📥") {
-        Row(
-            Modifier
-                .clip(RoundedCornerShape(50))
-                .background(p.lavender)
-                .bouncyClick { controller.openSystemDownloads() }
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-        ) { Text("系统下载", color = p.text, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
-    }
-    val list = items
-    if (list == null) {
-        Box(Modifier.fillMaxWidth().padding(vertical = 48.dp), contentAlignment = Alignment.Center) {
-            Text("翻找中… 🐰", color = p.subText, fontSize = 14.sp)
-        }
-        return
-    }
-    if (list.isEmpty()) {
-        Box(Modifier.fillMaxWidth().padding(vertical = 40.dp), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                BunnyMascot(Modifier.size(90.dp))
-                Spacer(Modifier.height(12.dp))
-                Text("还没有下载过东西哦～", color = p.subText, fontSize = 14.sp)
-            }
-        }
-        return
-    }
-    LazyColumn(
-        Modifier.heightIn(max = 520.dp),
-        contentPadding = PaddingValues(vertical = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        items(list, key = { it.key }) { d ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(p.background)
-                    .bouncyClick {
-                        if (d.status == DlStatus.DONE) {
-                            if (!controller.downloads.open(d)) controller.toast("没有能打开它的 App 呢")
-                        } else if (d.status == DlStatus.FAILED) controller.toast("这个下载失败了，可以删掉重新下哦")
-                        else controller.toast("还在下载中，等一下下～")
-                    }
-                    .padding(start = 14.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    Modifier.size(42.dp).clip(RoundedCornerShape(16.dp)).background(p.pink),
-                    contentAlignment = Alignment.Center,
-                ) { Text(mimeEmoji(d.mime, d.title), fontSize = 20.sp) }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(d.title, color = p.text, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    val status = when (d.status) {
-                        DlStatus.DONE -> "已完成 · ${sizeText(d.total)}"
-                        DlStatus.FAILED -> "下载失败 🥺"
-                        DlStatus.PAUSED -> "暂停中（等网络）· ${sizeText(d.soFar)}"
-                        DlStatus.PENDING -> "排队中…"
-                        DlStatus.RUNNING -> if (d.total > 0) "${sizeText(d.soFar)} / ${sizeText(d.total)}" else "已下 ${sizeText(d.soFar)}"
-                    }
-                    Text(status, color = if (d.status == DlStatus.FAILED) p.accentInk else p.subText, fontSize = 12.sp, maxLines = 1)
-                    if (d.active) {
-                        val frac = if (d.total > 0) (d.soFar.toFloat() / d.total).coerceIn(0f, 1f) else 0.1f
-                        val track = p.pink
-                        val fill = p.accent
-                        Box(
-                            Modifier
-                                .padding(top = 6.dp)
-                                .fillMaxWidth()
-                                .height(6.dp)
-                                .drawBehind {
-                                    val r = CornerRadius(size.height / 2)
-                                    drawRoundRect(track, cornerRadius = r)
-                                    drawRoundRect(fill, size = Size(maxOf(size.width * frac, size.height), size.height), cornerRadius = r)
-                                },
-                        )
-                    }
-                }
-                Spacer(Modifier.width(6.dp))
-                JellyButton(
-                    onClick = {
-                        scope.launch {
-                            controller.downloads.remove(d)
-                            controller.toast(if (d.active) "已取消下载" else "已删除")
-                            refresh++
-                        }
-                    },
-                    size = 34.dp, background = p.pink,
-                ) {
-                    Icon(if (d.active) CuteIcons.Close else CuteIcons.Trash, if (d.active) "取消" else "删除", tint = p.accent, modifier = Modifier.size(16.dp))
-                }
-            }
         }
     }
 }

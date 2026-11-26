@@ -18,6 +18,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.captureScreenRoboImage
+import com.yuka.cutebrowser.browser.DlStatus
+import com.yuka.cutebrowser.browser.DownloadItem
+import com.yuka.cutebrowser.ui.DownloadsContent
 import com.yuka.cutebrowser.ui.FindBar
 import com.yuka.cutebrowser.ui.ReaderLoading
 import com.yuka.cutebrowser.ui.ReaderToolbar
@@ -112,6 +115,27 @@ class FeatureScreenshotTest {
         rule.onNodeWithText("会发送：en.wikipedia.org 的网址").assertExists()
         rule.onNodeWithText("发送并翻译 🌏").assertExists()
         captureScreenRoboImage("$OUT/46_translate_confirm.png")
+    }
+
+    @Test
+    fun downloadsManager() {
+        val now = 1_764_000_000_000L
+        val rows = listOf(
+            DownloadRow(DownloadItem("dm:5", 5, null, "兔子壁纸合集.zip", "application/zip", DlStatus.RUNNING, 31_457_280, 52_428_800, now), DownloadRecord(5, "https://cdn.example.com/a.zip", "兔子壁纸合集.zip", "application/zip", null, now)),
+            DownloadRow(DownloadItem("dm:4", 4, null, "可爱贴纸.png", "image/png", DlStatus.DONE, 245_760, 245_760, now - 60_000), DownloadRecord(4, "https://example.com/s.png", "可爱贴纸.png", "image/png", null, now - 60_000)),
+            DownloadRow(DownloadItem("dm:3", 3, null, "养兔指南.pdf", "application/pdf", DlStatus.FAILED, 0, -1, now - 120_000), DownloadRecord(3, "https://example.com/g.pdf", "养兔指南.pdf", "application/pdf", null, now - 120_000)),
+            DownloadRow(null, DownloadRecord(2, "https://music.example.com/song.mp3", "晚安曲.mp3", "audio/mpeg", null, now - 86_400_000)),
+        )
+        rule.setContent {
+            CuteTheme(CuteThemeId.STRAWBERRY) {
+                Column(Modifier.fillMaxSize().background(LocalCutePalette.current.surface).padding(horizontal = 20.dp)) {
+                    DownloadsContent(rows, {}, {}, {}, {}, {}, {})
+                }
+            }
+        }
+        rule.onNodeWithText("正在下载 1 个 ⏬").assertExists()
+        rule.onNodeWithText("清掉失效记录").assertExists()
+        captureScreenRoboImage("$OUT/47_downloads_manager.png")
     }
 
     companion object {
