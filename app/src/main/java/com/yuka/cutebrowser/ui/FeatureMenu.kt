@@ -16,5 +16,6 @@ fun featureTools(controller: BrowserController, close: () -> Unit): List<ToolTil
         ToolTile("阅读模式", FeatureIcons.Book) { close(); f.openReader() },
         ToolTile("翻译网页", FeatureIcons.Translate) { close(); f.askTranslate() },
         ToolTile("桌面版网站", FeatureIcons.Desktop, checked = controller.current.desktop) { f.toggleDesktop(); close() },
+        ToolTile("加到桌面", FeatureIcons.AddHome) { close(); f.addToHomeScreen() },
     )
 }

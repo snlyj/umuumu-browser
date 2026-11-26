@@ -369,6 +369,17 @@ class PageFeatures(private val activity: ComponentActivity, private val controll
         controller.newTab(Translate.url(provider, target, a.url), incognito = a.incognito)
     }
 
+    // ---------------- 添加到主屏幕 ----------------
+
+    fun addToHomeScreen() {
+        val t = controller.current
+        if (t.isHome || !UrlUtils.isWebUrl(t.url)) { controller.toast("先打开一个网页再添加吧～"); return }
+        // 隐身标签不留痕迹：桌面图标会一直在
+        if (t.incognito) { controller.toast("隐身模式下不能添加到主屏幕哦 🎭"); return }
+        if (HomeShortcut.pin(activity, t.url, t.title)) controller.toast("已经请求添加到主屏幕啦，看看桌面的提示～ 🏡")
+        else controller.toast("这个桌面不支持添加快捷方式呢 🥺")
+    }
+
     companion object {
         const val CHECK_ASSET = "reader/check.min.js"
         const val EXTRACT_ASSET = "reader/extract.min.js"
