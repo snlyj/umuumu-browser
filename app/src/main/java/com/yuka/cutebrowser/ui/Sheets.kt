@@ -476,6 +476,8 @@ private fun SettingsSheet(controller: BrowserController, repo: CuteRepository, o
         Spacer(Modifier.height(18.dp))
         Label("安全")
         SettingAction("安全与隐私（HTTPS、Cookie、权限、应用锁…）", "🛡️", p.mint, onSecurity)
+        Spacer(Modifier.height(10.dp))
+        BackupAction(repo) // v1.7 备份与恢复，见 BackupUi.kt
 
         Spacer(Modifier.height(18.dp))
         Label("清理一下")

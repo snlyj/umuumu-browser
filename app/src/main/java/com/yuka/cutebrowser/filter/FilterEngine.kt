@@ -4,7 +4,10 @@ import java.io.BufferedReader
 import java.io.DataInputStream
 import java.io.DataOutputStream
 
-/** 资源类型（位掩码）。UNKNOWN 表示猜不出来，此时带类型限制的规则也照样生效（宽松处理） */
+/**
+ * 资源类型（位掩码）。UNKNOWN 表示猜不出来：v1.7 起只限定了类型的规则（$script、$image…）不再套到猜不出类型的请求上
+ * （以前会套，结果比如 `$image` 规则能把同地址的 XHR/脚本也拦掉）；只排除类型的（`$~image`）和 `$all` 仍然生效。
+ */
 object ResType {
     const val UNKNOWN = 0
     const val SCRIPT = 1
@@ -57,6 +60,8 @@ class FilterRequest(
     val host: String,
     val pageHost: String?,
     val type: Int,
+    /** 原始大小写的网址（只有 $match-case 规则会用） */
+    val rawUrl: String = url,
 ) {
     /** 只有带 third-party / first-party 选项的规则才会问，所以按需再算（每个请求省掉两次 substring） */
     val thirdParty: Boolean
@@ -231,8 +236,51 @@ class FilterEngine {
         addNetwork(line)
     }
 
+    /** $badfilter 要作废的规则（[ruleKey]） */
+    private val badKeys = HashSet<String>()
+
+    /** 两条规则"除了 badfilter 一模一样"的比较键：选项顺序、域名顺序不影响 */
+    private fun ruleKey(r: NetRule): String = buildString {
+        append(r.flags and KEY_FLAGS).append('|').append(r.types).append('|').append(r.pattern.removeSuffix("^").let { if (r.flags and HOST != 0) it else r.pattern })
+        append('|'); r.include?.sorted()?.joinTo(this, ",")
+        append('|'); r.exclude?.sorted()?.joinTo(this, ",")
+    }
+
+    private fun applyBadfilters() {
+        if (badKeys.isEmpty()) return
+        for (set in listOf(block, allow, important, docAllow, elemhideAllow)) {
+            val f = HOST or when {
+                set === allow -> EXC
+                set === important -> IMPORTANT
+                set === docAllow -> EXC or DOC
+                set === elemhideAllow -> EXC or ELEMHIDE
+                else -> 0
+            }
+            val it = set.plainHosts.iterator()
+            while (it.hasNext()) {
+                val h = it.next()
+                if ("$f|0|$h||" in badKeys) { it.remove(); set.size-- }
+            }
+            val hi = set.hostRules.entries.iterator()
+            while (hi.hasNext()) {
+                val e = hi.next()
+                val before = e.value.size
+                e.value.removeAll { ruleKey(it) in badKeys }
+                set.size -= before - e.value.size
+                if (e.value.isEmpty()) hi.remove()
+            }
+        }
+        val pi = pendingTokenRules.iterator()
+        while (pi.hasNext()) {
+            val (set, r) = pi.next()
+            if (ruleKey(r) in badKeys) { pi.remove(); set.size-- }
+        }
+        badKeys.clear()
+    }
+
     /** 全部加完之后调用：给每条带 token 的规则挑"最稀有"的 token 建索引 */
     fun finish() {
+        applyBadfilters()
         val freq = HashMap<String, Int>()
         val cand = ArrayList<List<String>>(pendingTokenRules.size)
         for ((_, r) in pendingTokenRules) {
@@ -287,6 +335,7 @@ class FilterEngine {
         if (s.length >= 2 && s[0] == '/' && s[s.length - 1] == '/') return // 正则规则：跳过
         var types = 0
         var negTypes = 0
+        var bad = false
         var include: ArrayList<String>? = null
         var exclude: ArrayList<String>? = null
         if (opts != null) {
@@ -301,7 +350,8 @@ class FilterEngine {
                     "third-party", "3p" -> flags = flags or if (neg) FIRST else THIRD
                     "first-party", "1p" -> flags = flags or if (neg) THIRD else FIRST
                     "important" -> flags = flags or IMPORTANT
-                    "match-case" -> Unit
+                    "match-case" -> if (!neg) flags = flags or MATCH_CASE
+                    "badfilter" -> bad = true
                     "domain", "from" -> {
                         if (eq < 0) return
                         for (d0 in name.substring(eq + 1).split('|')) {
@@ -325,6 +375,8 @@ class FilterEngine {
         }
         var mask = if (types != 0) types else if (negTypes != 0) ResType.ALL else 0
         if (negTypes != 0) mask = mask and negTypes.inv()
+        // 只排除了某些类型（$~image）或 $all：猜不出类型的请求也算在内
+        if ((types == 0 && negTypes != 0) || types and ResType.ALL == ResType.ALL) flags = flags or ANY_TYPE
         if (mask != 0 && mask and ResType.ALL == 0 && flags and (DOC or ELEMHIDE) == 0) return
 
         if (s.startsWith("||")) { flags = flags or HOST; s = s.substring(2) }
@@ -332,10 +384,14 @@ class FilterEngine {
         if (s.endsWith("|")) { flags = flags or END; s = s.substring(0, s.length - 1) }
         while (s.startsWith("*")) { s = s.substring(1); flags = flags and (HOST or START).inv() }
         while (s.endsWith("*")) { s = s.substring(0, s.length - 1); flags = flags and END.inv() }
-        s = s.lowercase()
+        val lower = s.lowercase()
+        // $match-case：只在规则里真有大写字母、而且不是纯域名规则时才有意义（域名本来就不分大小写）
+        if (flags and MATCH_CASE != 0 && (lower == s || (flags and HOST != 0 && HOST_ONLY_RE.matches(lower)))) flags = flags and MATCH_CASE.inv()
+        if (flags and MATCH_CASE == 0) s = lower
         if (s.all { it == '^' || it == '*' } && include == null) return // 空的、或只有 ^ * 的规则几乎匹配一切（`**^**` 会把所有请求都拦掉）：太危险
 
         val rule = NetRule(s, flags, mask, include?.toTypedArray(), exclude?.toTypedArray())
+        if (bad) { badKeys += ruleKey(rule); return } // $badfilter：作废"除了 badfilter 以外一模一样"的那条规则（finish 里统一删）
         val set = when {
             flags and DOC != 0 -> docAllow
             flags and ELEMHIDE != 0 -> elemhideAllow
@@ -354,7 +410,7 @@ class FilterEngine {
     }
 
     private fun validTokens(r: NetRule): List<String> {
-        val p = r.pattern
+        val p = if (r.flags and MATCH_CASE != 0) r.pattern.lowercase() else r.pattern
         val out = ArrayList<String>(4)
         var i = 0
         val anchoredStart = r.flags and (HOST or START) != 0
@@ -405,7 +461,11 @@ class FilterEngine {
         const val IMPORTANT = 64
         const val DOC = 128
         const val ELEMHIDE = 256
-        private const val CACHE_MAGIC = 0x554D5532 // "UMU2"
+        const val MATCH_CASE = 512
+        const val ANY_TYPE = 1024
+        /** 比较规则是否相同时看的标志位（锚点、选项；不含内部推导出来的 ANY_TYPE） */
+        private const val KEY_FLAGS = EXC or HOST or START or END or THIRD or FIRST or IMPORTANT or DOC or ELEMHIDE or MATCH_CASE
+        private const val CACHE_MAGIC = 0x554D5533 // "UMU3"：v1.7 规则语义变了（badfilter / match-case / 未知类型），旧缓存作废
         private const val NON_SUBRESOURCE = 1 shl 20
 
         private val OPTS_RE = Regex("^[~a-z0-9\\-_,=|.*:/%]+$", RegexOption.IGNORE_CASE)
@@ -444,7 +504,10 @@ class FilterEngine {
         }
 
         fun optionsOk(r: NetRule, req: FilterRequest): Boolean {
-            if (r.types != 0 && req.type != ResType.UNKNOWN && r.types and req.type == 0) return false
+            if (r.types != 0) {
+                if (req.type == ResType.UNKNOWN) { if (r.flags and ANY_TYPE == 0) return false }
+                else if (r.types and req.type == 0) return false
+            }
             if (r.flags and THIRD != 0 && !req.thirdParty) return false
             if (r.flags and FIRST != 0 && req.thirdParty) return false
             val inc = r.include
@@ -456,7 +519,7 @@ class FilterEngine {
 
         fun ruleMatches(r: NetRule, req: FilterRequest): Boolean {
             if (!optionsOk(r, req)) return false
-            val u = req.url
+            val u = if (r.flags and MATCH_CASE != 0) req.rawUrl else req.url
             val end = r.flags and END != 0
             return when {
                 r.flags and HOST != 0 -> {

@@ -105,7 +105,7 @@ object AdBlocker {
         // shouldInterceptRequest 在 WebView 的后台线程里调用：这里抛异常会让整个 App 崩掉，所以任何意外都当"不拦"
         return try {
             val lower = url.lowercase()
-            e.shouldBlock(FilterRequest(lower, host.lowercase(), pageHost, ResType.infer(lower, accept)))
+            e.shouldBlock(FilterRequest(lower, host.lowercase(), pageHost, ResType.infer(lower, accept), url))
         } catch (t: Throwable) {
             false
         }
