@@ -1,6 +1,13 @@
 package com.yuka.cutebrowser.features
 
+import android.webkit.WebSettings
 import android.webkit.WebView
+import androidx.webkit.ScriptHandler
+import androidx.webkit.UserAgentMetadata
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewCompat
+import com.yuka.cutebrowser.security.WebFeatures
+import java.util.WeakHashMap
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -49,6 +56,7 @@ class PageFeatures(private val activity: ComponentActivity, private val controll
 
     /** 标签页刚拿到一个（新建或重建的）WebView */
     fun onWebViewCreated(tab: TabState, v: WebView) {
+        if (tab.desktop) applyDesktop(tab, v)
         v.setFindListener { activeOrdinal, matches, done ->
             if (find.open && find.tabId == tab.id && tab.webView === v) {
                 find.active = activeOrdinal.coerceAtLeast(0)
@@ -63,6 +71,7 @@ class PageFeatures(private val activity: ComponentActivity, private val controll
     }
 
     fun onPageFinished(tab: TabState, view: WebView) {
+        if (tab.desktop && !WebFeatures.documentStartScript) view.evaluateJavascript(DesktopMode.viewportFallback, null)
         // 查找栏开着时换了页面：在新页面里重新找
         if (find.open && find.tabId == tab.id && find.query.isNotEmpty() && tab.webView === view) {
             find.counting = true
@@ -115,4 +124,52 @@ class PageFeatures(private val activity: ComponentActivity, private val controll
     }
 
     private fun findView(): WebView? = controller.tabs.firstOrNull { it.id == find.tabId }?.webView
+
+    // ---------------- 桌面版网站（每个标签单独） ----------------
+
+    /** 切到桌面版之前 WebView 原来的设置，切回手机版时还原 */
+    private class MobileSettings(val ua: String, val metadata: UserAgentMetadata?)
+    private val mobileSettings = WeakHashMap<WebView, MobileSettings>()
+    private val viewportScripts = WeakHashMap<WebView, ScriptHandler>()
+
+    fun toggleDesktop() {
+        val t = controller.current
+        if (t.isHome) { controller.toast("先打开一个网页再切换哦～"); return }
+        t.desktop = !t.desktop
+        t.webView?.let { applyDesktop(t, it) }
+        controller.reloadForFeature(t)
+        controller.toast(if (t.desktop) "已切换到桌面版网站 🖥️" else "已切回手机版网站 📱")
+    }
+
+    private fun applyDesktop(tab: TabState, v: WebView) {
+        val s = v.settings
+        if (tab.desktop) {
+            if (!mobileSettings.containsKey(v)) {
+                val md = if (WebFeatures.uaMetadata) runCatching { WebSettingsCompat.getUserAgentMetadata(s) }.getOrNull() else null
+                mobileSettings[v] = MobileSettings(s.userAgentString, md)
+            }
+            val def = runCatching { WebSettings.getDefaultUserAgent(v.context) }.getOrNull() ?: s.userAgentString
+            s.userAgentString = DesktopMode.userAgent(def)
+            s.useWideViewPort = true
+            s.loadWithOverviewMode = true
+            mobileSettings[v]?.metadata?.let { md ->
+                runCatching {
+                    WebSettingsCompat.setUserAgentMetadata(
+                        s,
+                        UserAgentMetadata.Builder(md).setMobile(false).setPlatform("Linux").setPlatformVersion("")
+                            .setModel("").setArchitecture("x86").setBitness(64).build(),
+                    )
+                }
+            }
+            if (WebFeatures.documentStartScript && !viewportScripts.containsKey(v)) {
+                runCatching { WebViewCompat.addDocumentStartJavaScript(v, DesktopMode.viewportScript, setOf("*")) }
+                    .getOrNull()?.let { viewportScripts[v] = it }
+            }
+        } else {
+            val orig = mobileSettings.remove(v) ?: return
+            s.userAgentString = orig.ua
+            orig.metadata?.let { md -> runCatching { WebSettingsCompat.setUserAgentMetadata(s, md) } }
+            viewportScripts.remove(v)?.let { runCatching { it.remove() } }
+        }
+    }
 }

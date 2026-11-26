@@ -101,6 +101,8 @@ class TabState(val id: Long, val incognito: Boolean = false) {
     var canGoForward by mutableStateOf(false)
     /** true 时显示唔姆主页（Compose 绘制），而不是网页 */
     var isHome by mutableStateOf(true)
+    /** 这个标签用桌面版网站（v1.7，见 features/DesktopMode） */
+    var desktop by mutableStateOf(false)
 
     // ---- 安全相关 ----
     /** 当前顶层页面的主机名（拦截回调在后台线程读，用来判断第三方请求） */
@@ -283,6 +285,9 @@ class BrowserController(
         val url = v.url ?: tab.url
         if (acceptLanguageFor(url) != null) v.loadUrl(url, extraHeaders(url)) else v.reload()
     }
+
+    /** v1.7 常用功能改了 WebView 设置后重新加载（需要时带上 Accept-Language） */
+    internal fun reloadForFeature(tab: TabState) = reloadWithLang(tab)
 
     private fun liveWebViews(): List<WebView> = tabs.mapNotNull { it.webView } + listOfNotNull(spare)
 
