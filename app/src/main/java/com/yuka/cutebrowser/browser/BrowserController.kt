@@ -103,6 +103,8 @@ class TabState(val id: Long, val incognito: Boolean = false) {
     var isHome by mutableStateOf(true)
     /** 这个标签用桌面版网站（v1.7，见 features/DesktopMode） */
     var desktop by mutableStateOf(false)
+    /** 页面看起来是文章：地址栏显示「阅读模式」按钮（v1.7） */
+    var readerable by mutableStateOf(false)
 
     // ---- 安全相关 ----
     /** 当前顶层页面的主机名（拦截回调在后台线程读，用来判断第三方请求） */
@@ -752,8 +754,10 @@ class BrowserController(
 
     // ---------------- WebView ----------------
 
-    @SuppressLint("SetJavaScriptEnabled")
-    private fun createWebView(incognito: Boolean): WebView {
+    private fun createWebView(incognito: Boolean): WebView = createBareWebView(incognito).also { setupWebView(it, incognito) }
+
+    /** v1.7 阅读模式用的 WebView 也走这里：主题深色 + 隐身 profile 一致，但不装网页那一套（脚本/桥/下载） */
+    internal fun createBareWebView(incognito: Boolean): WebView {
         // 网页深色：WebView 根据所在 Context 主题的 isLightTheme 决定 prefers-color-scheme；
         // 自带深色主题的网站用它们自己的，没有的再由"算法变暗"处理
         val ctx = if (webDark || incognito) ContextThemeWrapper(activity, R.style.Theme_CuteBrowser_WebDark) else activity
@@ -764,9 +768,11 @@ class BrowserController(
             val isolated = profile != null && WebHardening.useProfile(wv, profile)
             if (!isolated) wv.settings.cacheMode = WebSettings.LOAD_NO_CACHE
         }
-        setupWebView(wv, incognito)
         return wv
     }
+
+    internal fun cookieManagerForReader(incognito: Boolean): CookieManager =
+        if (incognito && incognitoProfile != null) WebHardening.cookieManager(incognitoProfile) else CookieManager.getInstance()
 
     private fun cookieManagerFor(tab: TabState?): CookieManager =
         if (tab?.incognito == true && incognitoProfile != null) WebHardening.cookieManager(incognitoProfile) else CookieManager.getInstance()

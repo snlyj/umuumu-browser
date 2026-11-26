@@ -13,6 +13,7 @@ fun featureTools(controller: BrowserController, close: () -> Unit): List<ToolTil
     val f = controller.features
     return listOf(
         ToolTile("页内查找", FeatureIcons.FindInPage) { close(); f.openFind() },
+        ToolTile("阅读模式", FeatureIcons.Book) { close(); f.openReader() },
         ToolTile("桌面版网站", FeatureIcons.Desktop, checked = controller.current.desktop) { f.toggleDesktop(); close() },
     )
 }

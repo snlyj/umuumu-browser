@@ -19,6 +19,8 @@ import androidx.compose.ui.unit.sp
 import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.captureScreenRoboImage
 import com.yuka.cutebrowser.ui.FindBar
+import com.yuka.cutebrowser.ui.ReaderLoading
+import com.yuka.cutebrowser.ui.ReaderToolbar
 import com.yuka.cutebrowser.ui.theme.CuteTheme
 import com.yuka.cutebrowser.ui.theme.CuteThemeId
 import com.yuka.cutebrowser.ui.theme.LocalCutePalette
@@ -77,6 +79,21 @@ class FeatureScreenshotTest {
         rule.onNodeWithText("没找到").assertExists()
         rule.onNodeWithContentDescription("上一个").assertIsNotEnabled()
         captureScreenRoboImage("$OUT/41_find_no_match_starry.png")
+    }
+
+    @Test
+    fun readerToolbarLoading() {
+        rule.setContent {
+            CuteTheme(CuteThemeId.SAKURA) {
+                Column(Modifier.fillMaxSize().background(LocalCutePalette.current.background)) {
+                    ReaderToolbar(ReaderStyle(zoom = 110, theme = ReaderTheme.SEPIA), onStyle = {}, onClose = {})
+                    ReaderLoading()
+                }
+            }
+        }
+        rule.onNodeWithText("110%").assertExists()
+        rule.onNodeWithContentDescription("退出阅读模式").assertExists()
+        captureScreenRoboImage("$OUT/45_reader_toolbar_loading.png")
     }
 
     companion object {

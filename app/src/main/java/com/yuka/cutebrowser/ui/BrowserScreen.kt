@@ -122,6 +122,7 @@ fun BrowserScreen(controller: BrowserController, repo: CuteRepository, protectio
                 onToggleBookmark = toggleBookmark,
                 onRefresh = { controller.reloadOrStop() },
                 onShield = { shield = true },
+                onReader = { controller.features.openReader() },
             )
             if (tab.isHome) CopiedLinkBanner(onOpen = { controller.open(it) })
             BunnyProgressBar(progress = { tab.progress }, visible = { tab.loading && !tab.isHome })
@@ -148,6 +149,7 @@ fun BrowserScreen(controller: BrowserController, repo: CuteRepository, protectio
                         )
                     }
                     tab.warning?.let { SecurityWarningPage(tab, it, controller) }
+                    controller.features.reader?.takeIf { it.tabId == tab.id }?.let { ReaderPage(it, controller) }
                 }
             }
             AnimatedVisibility(visible = !imeVisible, enter = expandVertically(), exit = shrinkVertically()) {
@@ -189,6 +191,7 @@ private fun AddressBar(
     onToggleBookmark: () -> Unit,
     onRefresh: () -> Unit,
     onShield: () -> Unit,
+    onReader: () -> Unit = {},
 ) {
     val p = LocalCutePalette.current
     val focusManager = LocalFocusManager.current
@@ -259,6 +262,7 @@ private fun AddressBar(
                     Icon(CuteIcons.Close, "清空", tint = p.accent, modifier = Modifier.size(16.dp))
                 }
             } else if (!tab.isHome) {
+                if (tab.readerable) ReaderChip(onReader)
                 JellyButton(onClick = onToggleBookmark, size = 38.dp, background = p.surface) {
                     Icon(
                         if (isBookmarked) CuteIcons.HeartFilled else CuteIcons.Heart,
